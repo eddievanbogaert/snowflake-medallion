@@ -1,0 +1,32 @@
+[sqlfluff]
+templater = dbt
+dialect = snowflake
+sql_file_exts = .sql
+max_line_length = 120
+
+# Rules to exclude:
+#   L016: line length (handled by max_line_length above)
+#   L034: select wildcards (allowed in bronze views)
+#   L031: avoid aliases in from/join (personal preference)
+exclude_rules = L016,L034,L031
+
+[sqlfluff:templater:dbt]
+project_dir = ./dbt
+profiles_dir = ~/.dbt
+profile = snowflake_medallion
+
+[sqlfluff:rules:L003]
+indent_unit = space
+tab_space_size = 4
+
+[sqlfluff:rules:L010]
+# Keyword case: UPPER
+capitalisation_policy = upper
+
+[sqlfluff:rules:L014]
+# Unquoted identifiers: UPPER
+extended_capitalisation_policy = upper
+
+[sqlfluff:rules:L040]
+# NULL handling keywords: UPPER
+capitalisation_policy = upper

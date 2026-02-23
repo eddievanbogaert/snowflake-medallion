@@ -1,0 +1,145 @@
+version: 2
+
+models:
+
+  # ---------------------------------------------------------------------------
+  # Customers
+  # ---------------------------------------------------------------------------
+  - name: slv_customers
+    description: >
+      Conformed, validated customer entity. Single source of truth for all downstream
+      customer analytics. PII columns (email_address, phone_number, date_of_birth,
+      full_name) are protected by dynamic masking policies applied at the column level.
+    columns:
+      - name: customer_id
+        description: Surrogate key from SQL Server. Integer.
+        tests:
+          - not_null
+          - unique
+      - name: email_address
+        description: Normalised (lower-cased) customer email. May be NULL for legacy records.
+        meta:
+          pii_category: EMAIL
+          masking_policy: FOUNDATION_DB.MASKING.EMAIL_MASK
+        tests:
+          - not_null_proportion:
+              min_proportion: 0.85
+          - dbt_expectations.expect_column_values_to_match_regex:
+              regex: '^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$'
+              config:
+                severity: warn
+      - name: full_name
+        description: Concatenated first + last name. May be NULL if both source fields are NULL.
+        meta:
+          pii_category: NAME
+      - name: date_of_birth
+        description: Date of birth. Cast from VARCHAR source; NULL if unparseable.
+        meta:
+          pii_category: DATE_OF_BIRTH
+      - name: age_band
+        description: Non-PII age grouping derived from date_of_birth.
+        tests:
+          - accepted_values:
+              values: ['UNDER_18','18_24','25_34','35_44','45_54','55_64','65_PLUS','UNKNOWN']
+      - name: customer_status
+        description: Current status of the customer account.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['ACTIVE','INACTIVE','SUSPENDED','CLOSED','PROSPECT','UNKNOWN']
+              config:
+                severity: warn
+      - name: country_code
+        description: ISO 3166-1 alpha-3 country code.
+      - name: created_at
+        description: UTC timestamp when the customer was created in the source system.
+        tests:
+          - not_null
+      - name: _dq_invalid_email
+        description: TRUE if email_address is non-NULL but fails the email regex check.
+      - name: _dq_future_dob
+        description: TRUE if date_of_birth is in the future (data quality issue).
+
+  # ---------------------------------------------------------------------------
+  # Orders
+  # ---------------------------------------------------------------------------
+  - name: slv_orders
+    description: >
+      Conformed, validated order entity enriched with computed line-item aggregates.
+    columns:
+      - name: order_id
+        description: Order surrogate key. BIGINT.
+        tests:
+          - not_null
+          - unique
+      - name: customer_id
+        description: FK to slv_customers.customer_id.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('slv_customers')
+              field: customer_id
+              config:
+                severity: warn   # Warn (not error) to allow for new customers not yet synced
+      - name: order_date
+        description: UTC timestamp when the order was placed.
+        tests:
+          - not_null
+      - name: order_status
+        description: Normalised order lifecycle status.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['PENDING','CONFIRMED','PROCESSING','SHIPPED','DELIVERED','CANCELLED','REFUNDED','RETURNED','UNKNOWN']
+      - name: order_total
+        description: Total order value in the order currency.
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+              config:
+                severity: error
+      - name: currency_code
+        description: ISO 4217 currency code. Defaults to USD if source is NULL.
+        tests:
+          - not_null
+      - name: _dq_negative_total
+        description: TRUE if order_total is negative.
+      - name: _dq_total_mismatch
+        description: TRUE if header order_total deviates from sum of line items by more than $0.01.
+
+  # ---------------------------------------------------------------------------
+  # Events
+  # ---------------------------------------------------------------------------
+  - name: slv_events
+    description: >
+      Typed, deduplicated behavioural event stream from S3.
+      Clustered by event_date for efficient time-range queries.
+      Bot and internal IP traffic is filtered.
+    columns:
+      - name: event_id
+        description: Unique event identifier from the source payload.
+        tests:
+          - not_null
+          - unique:
+              config:
+                severity: warn  # Late-arriving deduplication may still produce brief duplicates
+      - name: event_type
+        description: Event category name.
+        tests:
+          - not_null
+      - name: event_timestamp
+        description: >
+          UTC event timestamp. Derived from event_timestamp_raw; falls back to
+          server_timestamp_raw if null.
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: "'2020-01-01'::DATE"
+              max_value: "DATEADD('day', 1, CURRENT_DATE())"
+      - name: event_date
+        description: DATE portion of event_timestamp. Used for clustering.
+        tests:
+          - not_null
+      - name: is_authenticated
+        description: TRUE if the user was logged in at event time.

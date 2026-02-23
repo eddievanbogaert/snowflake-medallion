@@ -1,0 +1,163 @@
+name: 'snowflake_medallion'
+version: '1.0.0'
+config-version: 2
+
+# Profile defined in ~/.dbt/profiles.yml (not committed to source control)
+profile: 'snowflake_medallion'
+
+# Model path configuration
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# ============================================================
+# Model Configurations
+# Snowflake-specific: database, schema, and materialisation
+# per layer.  The generate_schema_name macro (in macros/) is
+# used to respect custom_schema overrides without prepending
+# the target schema name.
+# ============================================================
+
+models:
+  snowflake_medallion:
+
+    # ----------------------------------------------------------
+    # BRONZE LAYER
+    # ----------------------------------------------------------
+    bronze:
+      +database: RAW_DB
+      +schema: bronze_staging        # dbt uses this as a scratch area; final tables defined per sub-folder
+      +materialized: view            # Bronze models are thin views over raw landing tables
+      +tags: ['bronze']
+      +meta:
+        layer: bronze
+        owner: 'data-engineering'
+        pii_review_required: false   # Review per-model; bronze is raw/unmasked
+
+      sqlserver:
+        +schema: SQLSERVER_RAW
+        +tags: ['bronze', 'sqlserver']
+
+      s3:
+        +schema: S3_RAW
+        +tags: ['bronze', 's3']
+
+      snowflake_native:
+        +schema: SNOWFLAKE_NATIVE_RAW
+        +tags: ['bronze', 'native']
+
+    # ----------------------------------------------------------
+    # SILVER LAYER
+    # ----------------------------------------------------------
+    silver:
+      +database: FOUNDATION_DB
+      +materialized: incremental
+      +incremental_strategy: merge
+      +on_schema_change: fail        # Fail loudly if source schema changes
+      +tags: ['silver']
+      +meta:
+        layer: silver
+        owner: 'data-engineering'
+        pii_review_required: true
+
+      customers:
+        +schema: CUSTOMERS
+        +tags: ['silver', 'customers']
+
+      orders:
+        +schema: ORDERS
+        +tags: ['silver', 'orders']
+
+      products:
+        +schema: PRODUCTS
+        +tags: ['silver', 'products']
+
+      events:
+        +schema: EVENTS
+        +tags: ['silver', 'events']
+        +materialized: incremental   # Events are high-volume; always incremental
+
+      reference:
+        +schema: REFERENCE
+        +tags: ['silver', 'reference']
+        +materialized: table         # Reference data is small; full refresh is fine
+
+    # ----------------------------------------------------------
+    # GOLD LAYER
+    # ----------------------------------------------------------
+    gold:
+      +database: ANALYTICS_DB
+      +materialized: table
+      +tags: ['gold']
+      +meta:
+        layer: gold
+        owner: 'data-products'
+        pii_review_required: true
+
+      marketing:
+        +schema: MARKETING
+        +tags: ['gold', 'marketing']
+
+      finance:
+        +schema: FINANCE
+        +tags: ['gold', 'finance']
+
+      operations:
+        +schema: OPERATIONS
+        +tags: ['gold', 'operations']
+
+      executive:
+        +schema: EXECUTIVE
+        +tags: ['gold', 'executive']
+
+# ============================================================
+# Snapshot Configurations
+# ============================================================
+snapshots:
+  snowflake_medallion:
+    +database: FOUNDATION_DB
+    +schema: SNAPSHOTS
+    +strategy: timestamp
+    +updated_at: updated_at
+    +target_schema: SNAPSHOTS
+    +tags: ['snapshot']
+
+# ============================================================
+# Seed Configurations
+# ============================================================
+seeds:
+  snowflake_medallion:
+    +database: FOUNDATION_DB
+    +schema: REFERENCE
+    +tags: ['seed', 'reference']
+
+# ============================================================
+# Tests
+# ============================================================
+tests:
+  snowflake_medallion:
+    +store_failures: true
+    +schema: MONITORING_DB.DATA_QUALITY  # Store failed test rows for investigation
+    +limit: 500                          # Cap rows stored per test failure
+
+# ============================================================
+# Variables
+# ============================================================
+vars:
+  # Lookback window for incremental models (days)
+  incremental_lookback_days: 3
+
+  # Used by freshness assertions
+  max_load_lag_hours_bronze: 26
+  max_load_lag_hours_silver: 4
+
+  # Audit column defaults
+  dbt_loaded_by: "dbt"

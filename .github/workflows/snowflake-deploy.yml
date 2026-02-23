@@ -1,0 +1,117 @@
+name: Snowflake Infrastructure Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infrastructure/snowflake/**'
+      - '.github/workflows/snowflake-deploy.yml'
+
+  # Manual deploy with environment selection
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: dev
+        type: choice
+        options: [dev, test, prod]
+      script_path:
+        description: Specific script to run (e.g. security/03_column_masking_policies.sql)
+        required: false
+
+concurrency:
+  group: snowflake-deploy-${{ github.ref }}
+  cancel-in-progress: false  # Never cancel in-flight infra deploys
+
+jobs:
+
+  # ============================================================
+  # Validate SQL syntax before deploying
+  # ============================================================
+  validate:
+    name: Validate SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for hardcoded credentials
+        run: |
+          # Fail if any SQL file contains what looks like a real password or key
+          if grep -rn --include="*.sql" \
+            -E "(PASSWORD\s*=\s*'[^<][^']{4,}'" \
+            infrastructure/; then
+            echo "ERROR: Possible hardcoded credential found in SQL files"
+            exit 1
+          fi
+          echo "Credential check passed."
+
+      - name: Validate SQL placeholder substitution
+        run: |
+          # Warn if any <PLACEHOLDER> tokens remain in SQL files
+          count=$(grep -rn --include="*.sql" '<[A-Z_]*>' infrastructure/ | wc -l)
+          echo "Found $count placeholder tokens — review before running in production"
+          # This is expected for template files; we warn but don't fail
+
+  # ============================================================
+  # Deploy infrastructure changes
+  # Uses SnowSQL CLI with service account credentials from secrets
+  # ============================================================
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment || 'dev' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: validate
+    environment:
+      name: ${{ github.event.inputs.environment || 'dev' }}
+
+    env:
+      SNOWSQL_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWSQL_USER:    ${{ secrets.SNOWFLAKE_SYSADMIN_USER }}
+      SNOWSQL_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      SNOWSQL_ROLE:    SYSADMIN
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SnowSQL
+        run: |
+          curl -O https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.31-linux_x86_64.bash
+          SNOWSQL_DEST=~/bin SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql-1.2.31-linux_x86_64.bash
+          echo "~/bin" >> $GITHUB_PATH
+
+      - name: Write Snowflake private key
+        run: |
+          echo "${{ secrets.SNOWFLAKE_SYSADMIN_PRIVATE_KEY }}" | base64 -d > /tmp/snowflake_key.p8
+          chmod 600 /tmp/snowflake_key.p8
+          echo "SNOWSQL_PRIVATE_KEY_PATH=/tmp/snowflake_key.p8" >> $GITHUB_ENV
+
+      - name: Run specific script (manual dispatch)
+        if: github.event.inputs.script_path != ''
+        run: |
+          snowsql \
+            -f "infrastructure/snowflake/${{ github.event.inputs.script_path }}" \
+            --option exit_on_error=true \
+            --option variable_substitution=true
+        env:
+          SNOWSQL_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+
+      - name: Run changed scripts (push trigger)
+        if: github.event.inputs.script_path == ''
+        run: |
+          # Find SQL files changed in the last commit
+          git diff --name-only HEAD~1 HEAD -- 'infrastructure/snowflake/**.sql' | \
+          while read -r file; do
+            echo "Running: $file"
+            snowsql \
+              -f "$file" \
+              --option exit_on_error=true
+          done
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Snowflake infrastructure deployment failed. Check logs above."
+          # Integrate with Slack / PagerDuty here if needed

@@ -1,0 +1,133 @@
+version: 2
+
+# =============================================================================
+# Bronze Layer — Source Definitions
+# All sources point to the RAW_DB landing tables.
+# Freshness checks alert if data has not arrived within the expected SLA.
+# =============================================================================
+
+sources:
+
+  # ---------------------------------------------------------------------------
+  # SQL Server (Fivetran-managed CDC)
+  # ---------------------------------------------------------------------------
+  - name: sqlserver_raw
+    description: >
+      Raw tables loaded from the legacy SQL Server operational database via Fivetran CDC.
+      Tables are loaded continuously (near-real-time) during business hours,
+      with a full refresh nightly. Fivetran adds _fivetran_synced and _fivetran_deleted columns.
+    database: RAW_DB
+    schema: SQLSERVER_RAW
+    meta:
+      source_system: SQL Server
+      owner: data-engineering
+      loader: Fivetran
+
+    loaded_at_field: _fivetran_synced
+    freshness:
+      warn_after: {count: 4, period: hour}
+      error_after: {count: 26, period: hour}
+
+    tables:
+      - name: brz_sqlserver_customers
+        description: Raw customer master data from dbo.Customers.
+        columns:
+          - name: customer_id
+            description: Surrogate key from SQL Server. Not guaranteed to be non-null in raw.
+          - name: email_address
+            description: Customer email. May be NULL for legacy records.
+            meta:
+              pii_category: EMAIL
+          - name: _fivetran_deleted
+            description: TRUE if the row was deleted in the source system.
+
+      - name: brz_sqlserver_orders
+        description: Raw order headers from dbo.Orders.
+        columns:
+          - name: order_id
+            description: Order surrogate key.
+          - name: customer_id
+            description: FK to Customers.
+
+      - name: brz_sqlserver_order_items
+        description: Raw order line items from dbo.OrderItems.
+
+      - name: brz_sqlserver_products
+        description: Raw product catalogue from dbo.Products.
+        freshness:
+          warn_after: {count: 26, period: hour}  # Products change infrequently
+          error_after: {count: 72, period: hour}
+
+  # ---------------------------------------------------------------------------
+  # S3 — Event stream data (Snowpipe auto-ingest)
+  # ---------------------------------------------------------------------------
+  - name: s3_raw
+    description: >
+      Raw data auto-ingested from AWS S3 via Snowpipe.
+      Files arrive from Kinesis Firehose (events) and ADF (transaction exports).
+    database: RAW_DB
+    schema: S3_RAW
+    meta:
+      source_system: AWS S3
+      owner: data-engineering
+      loader: Snowpipe
+
+    loaded_at_field: loaded_at
+    freshness:
+      warn_after: {count: 2, period: hour}   # Event data should be near-real-time
+      error_after: {count: 6, period: hour}
+
+    tables:
+      - name: events_landing
+        description: >
+          Raw JSON clickstream / behavioural events from the web and mobile apps.
+          Loaded by Snowpipe as files arrive in s3://<bucket>/raw/events/.
+          Each row is a VARIANT containing the full event payload.
+        columns:
+          - name: raw_payload
+            description: Full JSON event object as a Snowflake VARIANT.
+          - name: file_name
+            description: Source S3 file name (from METADATA$FILENAME).
+          - name: file_row_number
+            description: Row position within the source file.
+          - name: loaded_at
+            description: UTC timestamp when Snowpipe loaded this row.
+
+      - name: transactions_landing
+        description: >
+          Raw Parquet financial transaction records from the upstream data lake.
+          Loaded by Snowpipe as files arrive in s3://<bucket>/raw/transactions/.
+        columns:
+          - name: raw_payload
+            description: Full Parquet record as a Snowflake VARIANT.
+          - name: loaded_at
+            description: UTC timestamp when Snowpipe loaded this row.
+
+  # ---------------------------------------------------------------------------
+  # Snowflake Native (reference data from Snowflake Marketplace / internal)
+  # ---------------------------------------------------------------------------
+  - name: snowflake_native_raw
+    description: >
+      Data originating from Snowflake Marketplace listings or internally-curated
+      reference datasets loaded directly into Snowflake.
+    database: RAW_DB
+    schema: SNOWFLAKE_NATIVE_RAW
+    meta:
+      source_system: Snowflake Native
+      owner: data-engineering
+      loader: manual
+
+    freshness:
+      warn_after: {count: 168, period: hour}  # Weekly refresh acceptable
+      error_after: {count: 336, period: hour}
+
+    tables:
+      - name: brz_sf_iso_country_codes
+        description: ISO 3166-1 country codes reference table.
+
+      - name: brz_sf_currency_rates
+        description: Daily FX rates from a Snowflake Marketplace provider.
+        loaded_at_field: rate_date
+        freshness:
+          warn_after: {count: 26, period: hour}
+          error_after: {count: 50, period: hour}

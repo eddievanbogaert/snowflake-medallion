@@ -1,0 +1,17 @@
+packages:
+  # dbt utilities — commonly used tests (expression_is_true, not_null_where, etc.)
+  - package: dbt-labs/dbt_utils
+    version: [">=1.3.0", "<2.0.0"]
+
+  # Advanced data quality tests (recency, equality, sequential values)
+  - package: calogica/dbt_expectations
+    version: [">=0.10.0", "<1.0.0"]
+
+  # Audit helper — compare results between environments / model runs
+  - package: dbt-labs/audit_helper
+    version: [">=0.12.0", "<1.0.0"]
+
+  # Elementary — automated data observability (anomaly detection, freshness, schema monitoring)
+  # Provides a free self-hosted data observability layer
+  - package: elementary-data/elementary
+    version: [">=0.16.0", "<1.0.0"]

@@ -1,0 +1,74 @@
+version: 2
+
+models:
+
+  # ---------------------------------------------------------------------------
+  # SQL Server Bronze Models
+  # ---------------------------------------------------------------------------
+
+  - name: brz_sqlserver_customers
+    description: >
+      Bronze view over Fivetran-managed SQL Server customer raw table.
+      Non-transforming — column selection and soft-delete filter only.
+    columns:
+      - name: customer_id
+        description: Source PK from SQL Server dbo.Customers.
+        tests:
+          - not_null
+      - name: _fivetran_synced
+        description: Fivetran sync timestamp. Used for freshness assertions.
+
+  - name: brz_sqlserver_orders
+    description: >
+      Bronze view over Fivetran-managed SQL Server orders raw table.
+    columns:
+      - name: order_id
+        description: Source PK from SQL Server dbo.Orders.
+        tests:
+          - not_null
+      - name: customer_id
+        description: FK to customers.
+        tests:
+          - not_null
+
+  - name: brz_sqlserver_products
+    description: >
+      Bronze view over Fivetran-managed SQL Server products raw table.
+    columns:
+      - name: product_id
+        description: Source PK from SQL Server dbo.Products.
+        tests:
+          - not_null
+
+  # ---------------------------------------------------------------------------
+  # S3 Bronze Models
+  # ---------------------------------------------------------------------------
+
+  - name: brz_s3_events
+    description: >
+      Bronze view over Snowpipe-loaded JSON events landing table.
+      JSON fields extracted as VARCHAR — all nullable.
+    columns:
+      - name: event_id
+        description: Unique event identifier from the event payload.
+        tests:
+          - not_null:
+              config:
+                severity: warn  # Warn only — upstream may occasionally omit event_id
+      - name: event_type
+        description: Event category (e.g. page_view, add_to_cart, purchase).
+        tests:
+          - not_null
+      - name: _loaded_at
+        description: UTC timestamp when Snowpipe loaded this record.
+
+  - name: brz_s3_transactions
+    description: >
+      Bronze view over Snowpipe-loaded Parquet transactions landing table.
+    columns:
+      - name: transaction_id
+        description: Unique transaction identifier.
+        tests:
+          - not_null
+      - name: amount_raw
+        description: Transaction amount as a string — cast to DECIMAL in silver.

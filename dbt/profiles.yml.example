@@ -1,0 +1,64 @@
+# =============================================================================
+# dbt profiles.yml — EXAMPLE
+# Copy to ~/.dbt/profiles.yml and populate with real values.
+# NEVER commit the real profiles.yml to source control.
+# =============================================================================
+
+snowflake_medallion:
+
+  # ----- LOCAL DEVELOPER (key-pair auth) -----
+  target: dev
+
+  outputs:
+
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+
+      # Key-pair authentication (recommended — no password)
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', '') }}"
+
+      # Role, warehouse, database
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'DATA_ENGINEER_ROLE') }}"
+      warehouse: TRANSFORM_WH
+      database: FOUNDATION_DB        # Default target DB; overridden per model via dbt_project.yml
+      schema: "DBT_DEV_{{ env_var('USER', 'unknown') }}"  # e.g. DBT_DEV_jsmith — per-dev isolation
+
+      threads: 8
+      client_session_keep_alive: true
+
+      # Query tags — every query from this profile will have these tags
+      query_tag: "dbt_dev"
+
+    # ----- CI / TEST environment -----
+    ci:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_CI_USER', 'SVC_DBT_TRANSFORMER') }}"
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', '') }}"
+      role: TRANSFORMER_ROLE
+      warehouse: TRANSFORM_WH
+      database: TEST_DB
+      schema: "DBT_CI_{{ env_var('GITHUB_RUN_ID', 'local') }}"  # Unique per CI run
+      threads: 4
+      client_session_keep_alive: false
+      query_tag: "dbt_ci"
+
+    # ----- PRODUCTION -----
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: SVC_DBT_TRANSFORMER
+      # Production uses key-pair; key stored in GitHub Actions / Vault secret
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', '') }}"
+      role: TRANSFORMER_ROLE
+      warehouse: TRANSFORM_WH
+      database: FOUNDATION_DB
+      schema: PROD_STAGING           # Temporary schema; dbt places final objects per dbt_project.yml config
+      threads: 16
+      client_session_keep_alive: true
+      query_tag: "dbt_prod"

@@ -1,0 +1,129 @@
+version: 2
+
+models:
+
+  # ---------------------------------------------------------------------------
+  # Marketing Domain
+  # ---------------------------------------------------------------------------
+  - name: gld_customer_360
+    description: >
+      Customer 360 data product for Marketing. Combines profile, lifetime order metrics,
+      90-day engagement signals, and RFM segmentation into a single denormalised table.
+      Row Access Policy (DOMAIN_ACCESS_POLICY) restricts visibility to MARKETING domain.
+      Masking policies protect PII columns for non-engineering roles.
+    meta:
+      owner: data-products
+      domain: MARKETING
+      certified: true
+    columns:
+      - name: customer_id
+        description: Unique customer identifier (integer PK from SQL Server).
+        tests:
+          - not_null
+          - unique
+      - name: email_address
+        description: Customer email. Masked for analyst/PBI roles.
+        meta:
+          pii_category: EMAIL
+      - name: full_name
+        description: First + last name. Masked for analyst/PBI roles.
+        meta:
+          pii_category: NAME
+      - name: rfm_segment
+        description: RFM-derived customer segment (e.g. CHAMPION, AT_RISK).
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - CHAMPION
+                - LOYAL_CUSTOMER
+                - POTENTIAL_LOYALIST
+                - NEW_CUSTOMER
+                - AT_RISK
+                - CANNOT_LOSE
+                - HIBERNATING
+                - PROMISING
+                - NEEDS_ATTENTION
+                - NO_ORDERS
+      - name: lifetime_revenue
+        description: Sum of delivered order values.
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: data_domain
+        description: Constant 'MARKETING' — used by DOMAIN_ACCESS_POLICY row filter.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['MARKETING']
+
+  # ---------------------------------------------------------------------------
+  # Finance Domain
+  # ---------------------------------------------------------------------------
+  - name: gld_revenue_summary
+    description: >
+      Daily revenue roll-up by product category, country, and acquisition channel.
+      Finance-certified data product for P&L and budget variance dashboards.
+      Row Access Policy restricts to FINANCE domain.
+    meta:
+      owner: data-products
+      domain: FINANCE
+      certified: true
+      grain: "One row per (order_date, product_category, country_code, acquisition_channel, currency_code, payment_method)"
+    columns:
+      - name: order_date
+        description: Date the order was placed (date grain).
+        tests:
+          - not_null
+      - name: gross_revenue
+        description: Sum of line totals for delivered orders.
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: net_revenue
+        description: Gross revenue less discounts.
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: gross_margin_pct
+        description: Gross margin as a percentage of gross revenue.
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: -100
+              max_value: 100
+      - name: data_domain
+        description: Constant 'FINANCE' — used by row access policy.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['FINANCE']
+
+  # ---------------------------------------------------------------------------
+  # Operations Domain
+  # ---------------------------------------------------------------------------
+  - name: gld_product_performance
+    description: >
+      Product-level performance scorecard for Operations and Supply Chain.
+      Includes sales velocity, margin, return rates, and fulfilment speed.
+    meta:
+      owner: data-products
+      domain: OPERATIONS
+      grain: "One row per active product (product_id)"
+    columns:
+      - name: product_id
+        description: Product surrogate key.
+        tests:
+          - not_null
+          - unique
+      - name: return_rate_pct
+        description: Units returned as a percentage of units delivered.
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 100
+      - name: data_domain
+        description: Constant 'OPERATIONS' — used by row access policy.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['OPERATIONS']
