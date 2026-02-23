@@ -143,3 +143,89 @@ models:
           - not_null
       - name: is_authenticated
         description: TRUE if the user was logged in at event time.
+
+  # ---------------------------------------------------------------------------
+  # Products
+  # ---------------------------------------------------------------------------
+  - name: slv_products
+    description: >
+      Conformed, validated product catalogue from SQL Server.
+      Includes derived list_margin_pct. Single source of truth for product data
+      consumed by gold-layer models.
+    columns:
+      - name: product_id
+        description: Product surrogate key (integer PK from SQL Server).
+        tests:
+          - not_null
+          - unique
+      - name: sku
+        description: Unique stock-keeping unit code.
+        tests:
+          - not_null
+          - unique:
+              config:
+                severity: warn
+      - name: list_price
+        description: Current list price in the source currency.
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: unit_cost
+        description: Unit cost of goods.
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: list_margin_pct
+        description: Gross margin percentage at list price. NULL if list_price is zero.
+      - name: is_active
+        description: FALSE if the product has been deactivated in the source system.
+
+  # ---------------------------------------------------------------------------
+  # Order Items
+  # ---------------------------------------------------------------------------
+  - name: slv_order_items
+    description: >
+      Conformed, validated order line items. Grain: one row per order line item.
+      Includes derived gross_margin per line using silver product cost data.
+    columns:
+      - name: order_item_id
+        description: Order item surrogate key (BIGINT PK from SQL Server).
+        tests:
+          - not_null
+          - unique
+      - name: order_id
+        description: FK to slv_orders.order_id.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('slv_orders')
+              field: order_id
+              config:
+                severity: warn
+      - name: product_id
+        description: FK to slv_products.product_id.
+        tests:
+          - not_null
+      - name: quantity
+        description: Number of units ordered.
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+              config:
+                severity: warn
+      - name: line_total
+        description: Total value for this line item after discount.
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: gross_margin
+        description: >
+          Line-level gross margin (line_total minus unit_cost × quantity).
+          NULL if the product has no cost on record.
+      - name: _dq_zero_or_negative_qty
+        description: TRUE if quantity is zero or negative.
+      - name: _dq_negative_price
+        description: TRUE if unit_price is negative.

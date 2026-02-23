@@ -25,14 +25,14 @@
 
 WITH products AS (
 
-    SELECT * FROM {{ ref('brz_sqlserver_products') }}
+    SELECT * FROM {{ ref('slv_products') }}
     WHERE is_active = TRUE
 
 ),
 
 order_items AS (
 
-    SELECT * FROM {{ source('sqlserver_raw', 'brz_sqlserver_order_items') }}
+    SELECT * FROM {{ ref('slv_order_items') }}
 
 ),
 

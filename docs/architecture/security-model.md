@@ -69,7 +69,7 @@ Two network policies restrict access by source IP:
 - **SERVICE_ACCOUNT_NETWORK_POLICY** — tighter; only specific integration tool IPs
 
 Applied at user level (overrides account-level policy for service accounts).
-See `infrastructure/snowflake/00_account_setup/05_network_policies.sql`.
+See [infrastructure/snowflake/account_setup/05_network_policies.sql](../../infrastructure/snowflake/account_setup/05_network_policies.sql).
 
 ---
 

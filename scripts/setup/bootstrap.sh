@@ -120,11 +120,11 @@ mkdir -p logs
 # Run scripts in order
 # ---------------------------------------------------------------------------
 log_info "=== PHASE 1: Account Setup ==="
-run_sql "infrastructure/snowflake/00_account_setup/01_databases.sql"    "SYSADMIN"
-run_sql "infrastructure/snowflake/00_account_setup/02_warehouses.sql"   "SYSADMIN"
-run_sql "infrastructure/snowflake/00_account_setup/03_roles.sql"        "SECURITYADMIN"
-run_sql "infrastructure/snowflake/00_account_setup/04_users.sql"        "USERADMIN"
-run_sql "infrastructure/snowflake/00_account_setup/05_network_policies.sql" "SECURITYADMIN"
+run_sql "infrastructure/snowflake/account_setup/01_databases.sql"    "SYSADMIN"
+run_sql "infrastructure/snowflake/account_setup/02_warehouses.sql"   "SYSADMIN"
+run_sql "infrastructure/snowflake/account_setup/03_roles.sql"        "SECURITYADMIN"
+run_sql "infrastructure/snowflake/account_setup/04_users.sql"        "USERADMIN"
+run_sql "infrastructure/snowflake/account_setup/05_network_policies.sql" "SECURITYADMIN"
 
 log_info "=== PHASE 2: Security Controls ==="
 run_sql "infrastructure/snowflake/security/01_object_tags.sql"           "ACCOUNTADMIN"

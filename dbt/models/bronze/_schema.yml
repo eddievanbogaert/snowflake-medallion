@@ -31,6 +31,23 @@ models:
         tests:
           - not_null
 
+  - name: brz_sqlserver_order_items
+    description: >
+      Bronze view over Fivetran-managed SQL Server order line items raw table.
+    columns:
+      - name: order_item_id
+        description: Source PK from SQL Server dbo.OrderItems.
+        tests:
+          - not_null
+      - name: order_id
+        description: FK to brz_sqlserver_orders.
+        tests:
+          - not_null
+      - name: product_id
+        description: FK to brz_sqlserver_products.
+        tests:
+          - not_null
+
   - name: brz_sqlserver_products
     description: >
       Bronze view over Fivetran-managed SQL Server products raw table.

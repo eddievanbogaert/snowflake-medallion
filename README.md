@@ -55,7 +55,7 @@ snowflake-medallion/
 │   └── runbooks/            # Operational runbooks
 ├── infrastructure/
 │   └── snowflake/
-│       ├── 00_account_setup/  # Databases, warehouses, roles, users
+│       ├── account_setup/     # Databases, warehouses, roles, users
 │       ├── security/          # Masking policies, row access, tags
 │       ├── monitoring/        # Resource monitors, alerts, audit logs
 │       ├── integrations/      # S3 storage integration, SQL Server
@@ -103,11 +103,11 @@ Run scripts in order using an `ACCOUNTADMIN` session:
 
 ```bash
 # Order matters — run as ACCOUNTADMIN
-snowsql -f infrastructure/snowflake/00_account_setup/01_databases.sql
-snowsql -f infrastructure/snowflake/00_account_setup/02_warehouses.sql
-snowsql -f infrastructure/snowflake/00_account_setup/03_roles.sql
-snowsql -f infrastructure/snowflake/00_account_setup/04_users.sql
-snowsql -f infrastructure/snowflake/00_account_setup/05_network_policies.sql
+snowsql -f infrastructure/snowflake/account_setup/01_databases.sql
+snowsql -f infrastructure/snowflake/account_setup/02_warehouses.sql
+snowsql -f infrastructure/snowflake/account_setup/03_roles.sql
+snowsql -f infrastructure/snowflake/account_setup/04_users.sql
+snowsql -f infrastructure/snowflake/account_setup/05_network_policies.sql
 
 # Security controls
 snowsql -f infrastructure/snowflake/security/01_object_tags.sql

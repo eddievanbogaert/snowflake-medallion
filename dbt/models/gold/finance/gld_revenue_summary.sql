@@ -31,13 +31,13 @@ WITH orders AS (
 
 order_items AS (
 
-    SELECT * FROM {{ source('sqlserver_raw', 'brz_sqlserver_order_items') }}
+    SELECT * FROM {{ ref('slv_order_items') }}
 
 ),
 
 products AS (
 
-    SELECT * FROM {{ ref('brz_sqlserver_products') }}
+    SELECT * FROM {{ ref('slv_products') }}
 
 ),
 
@@ -77,7 +77,7 @@ enriched_orders AS (
         oi.unit_price,
         oi.line_total,
         oi.discount_pct,
-        oi.line_total - (oi.quantity * p.unit_cost)                    AS gross_margin,
+        oi.gross_margin,
         o.tax_amount / NULLIF(o.line_item_count, 0)                    AS allocated_tax
 
     FROM orders o
