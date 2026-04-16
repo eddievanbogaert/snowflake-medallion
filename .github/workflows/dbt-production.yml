@@ -82,6 +82,14 @@ jobs:
         working-directory: ${{ env.DBT_DIR }}
         run: dbt deps
 
+      - name: dbt seed (reference data)
+        working-directory: ${{ env.DBT_DIR }}
+        run: |
+          dbt seed \
+            --profiles-dir ~/.dbt \
+            --select tag:reference
+        # Seeds are idempotent; safe to run on every production cycle
+
       - name: dbt source freshness check
         working-directory: ${{ env.DBT_DIR }}
         run: |
@@ -154,6 +162,17 @@ jobs:
             ${{ env.DBT_DIR }}/target/run_results.json
             ${{ env.DBT_DIR }}/target/manifest.json
           retention-days: 30
+
+      # Publish manifest under a stable name so dbt-ci.yml can download it
+      # for state:modified comparisons without needing to know the run ID.
+      - name: Publish production manifest for CI state comparison
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-manifest-prod
+          path: ${{ env.DBT_DIR }}/target/manifest.json
+          retention-days: 30
+          overwrite: true
 
       - name: Notify on failure
         if: failure()

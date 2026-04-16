@@ -1,0 +1,94 @@
+version: 2
+
+seeds:
+  - name: ref_data_domains
+    description: >
+      Reference table defining the business data domains used throughout the platform.
+      Controls row access policy filters, Power BI role mappings, and owning-team routing.
+      Sourced and maintained in this repository; not loaded from an external system.
+    config:
+      column_types:
+        domain_code: VARCHAR(50)
+        domain_name: VARCHAR(100)
+        description: VARCHAR(500)
+        owning_team: VARCHAR(100)
+        powerbi_role: VARCHAR(100)
+        row_access_filter: VARCHAR(500)
+        active: BOOLEAN
+    columns:
+      - name: domain_code
+        description: Short uppercase code for the domain (used as the DATA_DOMAIN column value in gold tables).
+        tests:
+          - not_null
+          - unique
+      - name: domain_name
+        description: Human-readable domain name.
+        tests:
+          - not_null
+      - name: description
+        description: Description of the domain's scope and purpose.
+      - name: owning_team
+        description: Team responsible for data products in this domain.
+      - name: powerbi_role
+        description: Snowflake role name that Power BI users in this domain should be assigned.
+      - name: row_access_filter
+        description: SQL filter expression applied by the DOMAIN_ACCESS_POLICY row access policy.
+      - name: active
+        description: Whether this domain is currently active. Inactive domains are excluded from RLS logic.
+        tests:
+          - not_null
+
+  - name: ref_country_regions
+    description: >
+      Reference table mapping ISO 3166-1 alpha-2 country codes to region groupings,
+      GDPR/CCPA applicability flags, and data residency zones.
+      Used by REGION_RESIDENCY_POLICY (row access policy) and silver-layer event enrichment.
+      Maintained in this repository; updated when regulatory scope changes.
+    config:
+      column_types:
+        country_code: VARCHAR(10)
+        country_name: VARCHAR(100)
+        region_code: VARCHAR(20)
+        region_name: VARCHAR(100)
+        gdpr_applicable: BOOLEAN
+        ccpa_applicable: BOOLEAN
+        data_residency_zone: VARCHAR(20)
+        notes: VARCHAR(500)
+    columns:
+      - name: country_code
+        description: ISO 3166-1 alpha-2 country code (e.g. GB, US, DE). UNKNOWN for unresolvable values.
+        tests:
+          - not_null
+          - unique
+      - name: country_name
+        description: Full English country name.
+        tests:
+          - not_null
+      - name: region_code
+        description: Aggregated region code (EU, UK, AMER, APAC, GLOBAL).
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['EU', 'UK', 'AMER', 'APAC', 'GLOBAL']
+      - name: gdpr_applicable
+        description: >
+          TRUE if GDPR or a GDPR-equivalent local law applies to personal data of residents
+          of this country. Includes EU member states, EEA countries, and countries with
+          EU adequacy decisions.
+        tests:
+          - not_null
+      - name: ccpa_applicable
+        description: TRUE if the California Consumer Privacy Act applies (currently only US).
+        tests:
+          - not_null
+      - name: data_residency_zone
+        description: >
+          Zone for data residency enforcement — aligns with REGION_RESIDENCY_POLICY.
+          EU = must stay in EU/UK accounts. UK = can stay in UK or EU.
+          GLOBAL = no residency restriction.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['EU', 'UK', 'GLOBAL']
+      - name: notes
+        description: Free-text notes about specific legal frameworks or edge cases.

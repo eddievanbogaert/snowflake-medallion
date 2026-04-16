@@ -1,0 +1,7 @@
+domain_code,domain_name,description,owning_team,powerbi_role,row_access_filter,active
+MARKETING,Marketing,Customer acquisition, retention, and lifecycle analytics,marketing-analytics,POWERBI_MARKETING_ROLE,data_domain = 'MARKETING',true
+FINANCE,Finance,Revenue reporting, P&L, and financial KPIs,finance-data,POWERBI_FINANCE_ROLE,data_domain = 'FINANCE',true
+OPERATIONS,Operations,Supply chain, fulfilment, and inventory management,ops-analytics,POWERBI_OPERATIONS_ROLE,data_domain IN ('OPERATIONS','SUPPLY_CHAIN'),true
+SUPPLY_CHAIN,Supply Chain,Procurement, logistics, and vendor performance (sub-domain of OPERATIONS),ops-analytics,POWERBI_OPERATIONS_ROLE,data_domain IN ('OPERATIONS','SUPPLY_CHAIN'),true
+EXECUTIVE,Executive,Cross-functional KPIs and board-level reporting,data-platform,POWERBI_ROLE,TRUE,true
+PRODUCT,Product,Product usage analytics and feature adoption,product-analytics,POWERBI_ROLE,data_domain = 'PRODUCT',false

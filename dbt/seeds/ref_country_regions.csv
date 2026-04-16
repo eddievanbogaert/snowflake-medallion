@@ -1,0 +1,81 @@
+country_code,country_name,region_code,region_name,gdpr_applicable,ccpa_applicable,data_residency_zone,notes
+AD,Andorra,EU,European Union,true,false,EU,EEA member
+AE,United Arab Emirates,APAC,Asia Pacific,false,false,GLOBAL,
+AF,Afghanistan,APAC,Asia Pacific,false,false,GLOBAL,
+AG,Antigua and Barbuda,AMER,Americas,false,false,GLOBAL,
+AL,Albania,EU,European Union,true,false,EU,EEA applicant country
+AM,Armenia,EU,European Union,false,false,GLOBAL,Not EEA
+AO,Angola,APAC,Africa,false,false,GLOBAL,
+AR,Argentina,AMER,Americas,false,false,GLOBAL,Has PDPA
+AT,Austria,EU,European Union,true,false,EU,EU member
+AU,Australia,APAC,Asia Pacific,false,false,GLOBAL,Has Privacy Act
+AZ,Azerbaijan,EU,European Union,false,false,GLOBAL,Not EEA
+BA,Bosnia and Herzegovina,EU,European Union,false,false,GLOBAL,Not EEA
+BE,Belgium,EU,European Union,true,false,EU,EU member
+BG,Bulgaria,EU,European Union,true,false,EU,EU member
+BR,Brazil,AMER,Americas,false,false,GLOBAL,Has LGPD
+BY,Belarus,EU,European Union,false,false,GLOBAL,Not EEA
+CA,Canada,AMER,Americas,false,false,GLOBAL,Has PIPEDA/Law 25
+CH,Switzerland,EU,European Union,true,false,EU,Adequacy decision; not EEA
+CL,Chile,AMER,Americas,false,false,GLOBAL,
+CN,China,APAC,Asia Pacific,false,false,GLOBAL,Has PIPL
+CO,Colombia,AMER,Americas,false,false,GLOBAL,
+CY,Cyprus,EU,European Union,true,false,EU,EU member
+CZ,Czech Republic,EU,European Union,true,false,EU,EU member
+DE,Germany,EU,European Union,true,false,EU,EU member
+DK,Denmark,EU,European Union,true,false,EU,EU member
+EE,Estonia,EU,European Union,true,false,EU,EU member
+EG,Egypt,APAC,Africa,false,false,GLOBAL,
+ES,Spain,EU,European Union,true,false,EU,EU member
+FI,Finland,EU,European Union,true,false,EU,EU member
+FR,France,EU,European Union,true,false,EU,EU member
+GB,United Kingdom,UK,United Kingdom,true,false,UK,UK GDPR applies; adequacy decision
+GE,Georgia,EU,European Union,false,false,GLOBAL,Not EEA
+GR,Greece,EU,European Union,true,false,EU,EU member
+HR,Croatia,EU,European Union,true,false,EU,EU member
+HU,Hungary,EU,European Union,true,false,EU,EU member
+ID,Indonesia,APAC,Asia Pacific,false,false,GLOBAL,Has PDP Law
+IE,Ireland,EU,European Union,true,false,EU,EU member
+IL,Israel,EU,European Union,false,false,GLOBAL,Has Privacy Protection Law; adequacy
+IN,India,APAC,Asia Pacific,false,false,GLOBAL,Has DPDP Act
+IS,Iceland,EU,European Union,true,false,EU,EEA member
+IT,Italy,EU,European Union,true,false,EU,EU member
+JP,Japan,APAC,Asia Pacific,false,false,GLOBAL,Has APPI; adequacy decision
+KE,Kenya,APAC,Africa,false,false,GLOBAL,
+KR,South Korea,APAC,Asia Pacific,false,false,GLOBAL,Has PIPA
+KZ,Kazakhstan,EU,European Union,false,false,GLOBAL,Not EEA
+LI,Liechtenstein,EU,European Union,true,false,EU,EEA member
+LT,Lithuania,EU,European Union,true,false,EU,EU member
+LU,Luxembourg,EU,European Union,true,false,EU,EU member
+LV,Latvia,EU,European Union,true,false,EU,EU member
+MA,Morocco,APAC,Africa,false,false,GLOBAL,
+MD,Moldova,EU,European Union,false,false,GLOBAL,Not EEA
+ME,Montenegro,EU,European Union,false,false,GLOBAL,Not EEA
+MK,North Macedonia,EU,European Union,false,false,GLOBAL,Not EEA
+MT,Malta,EU,European Union,true,false,EU,EU member
+MX,Mexico,AMER,Americas,false,false,GLOBAL,Has LFPDPPP
+MY,Malaysia,APAC,Asia Pacific,false,false,GLOBAL,Has PDPA
+NG,Nigeria,APAC,Africa,false,false,GLOBAL,Has NDPA
+NL,Netherlands,EU,European Union,true,false,EU,EU member
+NO,Norway,EU,European Union,true,false,EU,EEA member
+NZ,New Zealand,APAC,Asia Pacific,false,false,GLOBAL,Has Privacy Act
+PH,Philippines,APAC,Asia Pacific,false,false,GLOBAL,Has Data Privacy Act
+PL,Poland,EU,European Union,true,false,EU,EU member
+PT,Portugal,EU,European Union,true,false,EU,EU member
+RO,Romania,EU,European Union,true,false,EU,EU member
+RS,Serbia,EU,European Union,false,false,GLOBAL,Adequacy decision
+RU,Russia,EU,European Union,false,false,GLOBAL,Has Federal Law No. 152-FZ
+SA,Saudi Arabia,APAC,Asia Pacific,false,false,GLOBAL,Has PDPL
+SE,Sweden,EU,European Union,true,false,EU,EU member
+SG,Singapore,APAC,Asia Pacific,false,false,GLOBAL,Has PDPA
+SI,Slovenia,EU,European Union,true,false,EU,EU member
+SK,Slovakia,EU,European Union,true,false,EU,EU member
+TH,Thailand,APAC,Asia Pacific,false,false,GLOBAL,Has PDPA
+TR,Turkey,EU,European Union,false,false,GLOBAL,Has KVKK
+TW,Taiwan,APAC,Asia Pacific,false,false,GLOBAL,Has PDPA
+UA,Ukraine,EU,European Union,false,false,GLOBAL,Not EEA
+US,United States,AMER,Americas,false,true,GLOBAL,CCPA for CA residents; various state laws
+UY,Uruguay,AMER,Americas,false,false,GLOBAL,Adequacy decision
+VN,Vietnam,APAC,Asia Pacific,false,false,GLOBAL,Has Cybersecurity Law
+ZA,South Africa,APAC,Africa,false,false,GLOBAL,Has POPIA
+UNKNOWN,Unknown,GLOBAL,Global,false,false,GLOBAL,Country could not be determined

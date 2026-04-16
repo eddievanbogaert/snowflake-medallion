@@ -120,22 +120,27 @@ mkdir -p logs
 # Run scripts in order
 # ---------------------------------------------------------------------------
 log_info "=== PHASE 1: Account Setup ==="
-run_sql "infrastructure/snowflake/account_setup/01_databases.sql"    "SYSADMIN"
-run_sql "infrastructure/snowflake/account_setup/02_warehouses.sql"   "SYSADMIN"
-run_sql "infrastructure/snowflake/account_setup/03_roles.sql"        "SECURITYADMIN"
-run_sql "infrastructure/snowflake/account_setup/04_users.sql"        "USERADMIN"
-run_sql "infrastructure/snowflake/account_setup/05_network_policies.sql" "SECURITYADMIN"
+run_sql "infrastructure/snowflake/account_setup/01_databases.sql"         "SYSADMIN"
+run_sql "infrastructure/snowflake/account_setup/02_warehouses.sql"        "SYSADMIN"
+run_sql "infrastructure/snowflake/account_setup/03_roles.sql"             "SECURITYADMIN"
+run_sql "infrastructure/snowflake/account_setup/04_users.sql"             "USERADMIN"
+run_sql "infrastructure/snowflake/account_setup/05_network_policies.sql"  "SECURITYADMIN"
+run_sql "infrastructure/snowflake/account_setup/06_password_policies.sql" "ACCOUNTADMIN"   # CIS 1.3/1.4
+run_sql "infrastructure/snowflake/account_setup/07_scim_integration.sql"  "ACCOUNTADMIN"   # CIS 1.6
 
 log_info "=== PHASE 2: Security Controls ==="
-run_sql "infrastructure/snowflake/security/01_object_tags.sql"           "ACCOUNTADMIN"
-run_sql "infrastructure/snowflake/security/02_data_classification.sql"   "ACCOUNTADMIN"
-run_sql "infrastructure/snowflake/security/03_column_masking_policies.sql" "SECURITYADMIN"
-run_sql "infrastructure/snowflake/security/04_row_access_policies.sql"   "ACCOUNTADMIN"
+run_sql "infrastructure/snowflake/security/01_object_tags.sql"                  "ACCOUNTADMIN"
+run_sql "infrastructure/snowflake/security/02_data_classification.sql"          "ACCOUNTADMIN"
+run_sql "infrastructure/snowflake/security/03_column_masking_policies.sql"      "SECURITYADMIN"
+run_sql "infrastructure/snowflake/security/04_row_access_policies.sql"          "ACCOUNTADMIN"
+run_sql "infrastructure/snowflake/security/05_managed_access_schemas.sql"       "ACCOUNTADMIN"   # CIS 3.5
+# Note: 06_cis_compliance_checks.sql is for auditing, not deployment — run manually
 
 log_info "=== PHASE 3: Monitoring ==="
-run_sql "infrastructure/snowflake/monitoring/01_resource_monitors.sql"   "ACCOUNTADMIN"
-run_sql "infrastructure/snowflake/monitoring/02_audit_logging.sql"       "ACCOUNTADMIN"
-run_sql "infrastructure/snowflake/monitoring/03_alerts.sql"              "ACCOUNTADMIN"
+run_sql "infrastructure/snowflake/monitoring/01_resource_monitors.sql"          "ACCOUNTADMIN"
+run_sql "infrastructure/snowflake/monitoring/02_audit_logging.sql"              "ACCOUNTADMIN"
+run_sql "infrastructure/snowflake/monitoring/03_alerts.sql"                     "ACCOUNTADMIN"
+run_sql "infrastructure/snowflake/monitoring/04_privileged_access_alerts.sql"   "ACCOUNTADMIN"   # CIS 5.3/6.x
 
 log_info "=== PHASE 4: Integrations ==="
 run_sql "infrastructure/snowflake/integrations/01_storage_integration_s3.sql"  "ACCOUNTADMIN"
@@ -153,5 +158,8 @@ log_info "Next steps:"
 log_info "  1. Register RSA public keys for service accounts (04_users.sql)"
 log_info "  2. Update S3 bucket name and IAM role ARN in integrations (01_storage_integration_s3.sql)"
 log_info "  3. Confirm Fivetran/ADF connections are live"
-log_info "  4. Run dbt deps && dbt run to validate the full pipeline"
+log_info "  4. Run dbt deps && dbt seed && dbt run to validate the full pipeline"
 log_info "  5. Apply row access and masking policies: powerbi/row_level_security/rls_snowflake_setup.sql"
+log_info "  6. Configure SCIM in Azure AD (see 07_scim_integration.sql for steps)"
+log_info "  7. Verify CIS compliance posture: infrastructure/snowflake/security/06_cis_compliance_checks.sql"
+log_info "  8. For multi-account / DR setup: see infrastructure/snowflake/multi_account/"

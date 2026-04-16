@@ -1,0 +1,198 @@
+-- =============================================================================
+-- multi_account/03_account_replication.sql
+-- Cross-region and cross-account replication for HA/DR and audit isolation.
+--
+-- USE CASES
+-- ---------
+--   1. Primary / DR failover — replicate PROD to a secondary region so that
+--      if AWS US-East-1 has an outage, you can fail over to AWS US-West-2.
+--   2. Audit log isolation — replicate MONITORING_DB from PROD to a locked-down
+--      governance account, so audit logs can't be tampered with by the PROD admin.
+--   3. Cross-region data residency — replicate a subset of data to an EU account
+--      to meet GDPR data residency requirements.
+--
+-- REPLICATION GROUPS vs DATABASE REPLICATION
+-- -------------------------------------------
+-- Snowflake offers two replication models:
+--
+--   Database Replication (older, simpler):
+--     Replicates a single database independently.
+--     Failover is per-database; no account-level objects replicated.
+--
+--   Replication Groups / Failover Groups (recommended):
+--     Replicates multiple databases + account-level objects (roles, users,
+--     network policies, warehouses) as a consistent unit.
+--     FAILOVER GROUP supports one-command role-swap for DR.
+--     Requires Snowflake Business Critical edition.
+--
+-- This template uses Failover Groups (the recommended approach).
+--
+-- Run as: ACCOUNTADMIN (on both primary and secondary accounts)
+--
+-- GOVERNMENT / PUBLIC SECTOR NOTES
+-- ---------------------------------
+-- • Failover Groups require Snowflake Business Critical edition. FedRAMP High
+--   environments (snowflakecomputing.mil) also support this feature, but
+--   cross-region failover targets must themselves be within the authorized
+--   FedRAMP boundary (e.g., only replicate to another FedRAMP-authorized region).
+-- • For DoD IL5 workloads, confirm the secondary region's impact-level
+--   authorization before enabling cross-region replication.
+-- • Some government contracts prohibit replication outside a specific cloud
+--   boundary entirely — verify before configuring cross-account replication.
+-- • Commercial cloud Snowflake accounts CANNOT be used as replication targets
+--   for FedRAMP-authorized accounts; keep both primary and DR within the
+--   same authorized boundary.
+-- =============================================================================
+
+-- =============================================================================
+-- PART A: PRIMARY ACCOUNT SETUP
+-- Run on: PROD account (e.g., ACME-PROD)
+-- =============================================================================
+
+USE ROLE ACCOUNTADMIN;
+
+-- ---------------------------------------------------------------------------
+-- ENABLE REPLICATION TO SECONDARY ACCOUNTS
+-- Allows the secondary account to pull replicated data.
+-- Replace <ORG>.<SECONDARY_ACCOUNT> with your actual account identifiers.
+-- ---------------------------------------------------------------------------
+
+-- Enable replication for specific databases on the primary account
+ALTER DATABASE RAW_DB        ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME-PROD-DR>;
+ALTER DATABASE FOUNDATION_DB ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME-PROD-DR>;
+ALTER DATABASE ANALYTICS_DB  ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME-PROD-DR>;
+ALTER DATABASE MONITORING_DB ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME-PROD-DR>;
+
+-- ---------------------------------------------------------------------------
+-- CREATE FAILOVER GROUP (recommended for DR)
+-- A failover group replicates databases + account-level objects atomically.
+-- ---------------------------------------------------------------------------
+
+-- NOTE: COMMENT is NOT a supported parameter for CREATE FAILOVER GROUP.
+-- Valid OBJECT_TYPES: ACCOUNT PARAMETERS, DATABASES, EXTERNAL VOLUMES,
+--   INTEGRATIONS, LISTINGS, NETWORK POLICIES, PROFILES, RESOURCE MONITORS,
+--   ROLES, SHARES, USERS, WAREHOUSES
+CREATE FAILOVER GROUP IF NOT EXISTS PROD_FAILOVER_GROUP
+    OBJECT_TYPES = DATABASES,
+                   USERS,
+                   ROLES,
+                   WAREHOUSES,
+                   RESOURCE MONITORS,
+                   NETWORK POLICIES
+    ALLOWED_DATABASES = RAW_DB, FOUNDATION_DB, ANALYTICS_DB, MONITORING_DB
+    ALLOWED_ACCOUNTS  = <ORG>.<ACME-PROD-DR>       -- secondary (DR) account
+    REPLICATION_SCHEDULE = '10 MINUTES';            -- RPO = 10 minutes
+
+-- ---------------------------------------------------------------------------
+-- REFRESH ON-DEMAND (manual trigger for testing or emergency cutover)
+-- ---------------------------------------------------------------------------
+
+-- ALTER FAILOVER GROUP PROD_FAILOVER_GROUP REFRESH;
+
+-- =============================================================================
+-- PART B: SECONDARY (DR) ACCOUNT SETUP
+-- Run on: DR account (e.g., ACME-PROD-DR) — different account, same SQL client
+-- =============================================================================
+
+-- Connect to the DR account, then run:
+
+-- USE ROLE ACCOUNTADMIN;
+
+-- Create the secondary failover group — mirrors the primary
+-- CREATE FAILOVER GROUP PROD_FAILOVER_GROUP
+--     AS REPLICA OF <ORG>.<ACME-PROD>.PROD_FAILOVER_GROUP;
+
+-- ---------------------------------------------------------------------------
+-- FAILOVER PROCEDURE  (break-glass for DR)
+-- Promotes the secondary to primary. Run on the SECONDARY account.
+-- The old primary becomes a secondary automatically.
+-- ---------------------------------------------------------------------------
+
+-- -- 1. Verify replication lag before failing over
+-- SELECT SYSTEM$GET_REPLICATION_GROUP_REFRESH_HISTORY('PROD_FAILOVER_GROUP');
+
+-- -- 2. Initiate failover (makes this account the new primary)
+-- ALTER FAILOVER GROUP PROD_FAILOVER_GROUP PRIMARY;
+
+-- -- 3. Update DNS / connection strings to point to the new primary account
+-- --    (this step is outside Snowflake — update your dbt profiles, BI tool
+-- --    data sources, and Fivetran connector configuration)
+
+-- -- 4. After the old primary account recovers:
+-- --    Re-add it as a secondary by running CREATE FAILOVER GROUP ... AS REPLICA OF ...
+-- --    from the original primary account.
+
+-- =============================================================================
+-- PART C: AUDIT LOG REPLICATION TO GOVERNANCE ACCOUNT
+-- Replicates MONITORING_DB from PROD to a read-only governance account.
+-- The governance account has no ACCOUNTADMIN; audit logs are tamper-evident.
+-- =============================================================================
+
+-- Run on PROD account:
+-- ALTER DATABASE MONITORING_DB ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME-GOVERNANCE>;
+
+-- Run on GOVERNANCE account:
+-- CREATE DATABASE MONITORING_DB_PROD
+--     AS REPLICA OF <ORG>.<ACME-PROD>.MONITORING_DB;
+-- ALTER DATABASE MONITORING_DB_PROD REFRESH;   -- initial sync
+-- ALTER DATABASE MONITORING_DB_PROD ENABLE REPLICATION; -- schedule auto-refresh
+
+-- =============================================================================
+-- MONITORING: REPLICATION LAG AND HEALTH
+-- =============================================================================
+
+-- Check replication lag for the failover group
+SELECT *
+FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY(
+    REPLICATION_GROUP_NAME => 'PROD_FAILOVER_GROUP'
+))
+ORDER BY phase_name;
+
+-- Check replication lag for individual databases (legacy database replication)
+SELECT *
+FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.DATABASE_REFRESH_HISTORY())
+ORDER BY start_time DESC
+LIMIT 20;
+
+-- Store replication health in MONITORING_DB for alerting
+CREATE OR REPLACE VIEW MONITORING_DB.COST_MANAGEMENT.VW_REPLICATION_HEALTH AS
+SELECT
+    replication_group_name,
+    phase_name,
+    start_time,
+    end_time,
+    DATEDIFF('minute', start_time, end_time)  AS duration_minutes,
+    status,
+    error_count,
+    total_bytes_replicated / POWER(1024, 3)   AS gb_replicated
+FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY(
+    REPLICATION_GROUP_NAME => 'PROD_FAILOVER_GROUP'
+))
+ORDER BY start_time DESC;
+
+GRANT SELECT ON VIEW MONITORING_DB.COST_MANAGEMENT.VW_REPLICATION_HEALTH
+    TO ROLE DATA_ENGINEER_ROLE;
+
+-- Alert if replication has not completed in the last 20 minutes (RPO breach risk)
+CREATE ALERT IF NOT EXISTS ALERT_REPLICATION_LAG
+    WAREHOUSE  = ADMIN_WH
+    SCHEDULE   = '10 MINUTES'
+    IF (EXISTS (
+        SELECT 1
+        FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY(
+            REPLICATION_GROUP_NAME => 'PROD_FAILOVER_GROUP'
+        ))
+        WHERE status  != 'SUCCEEDED'
+          AND start_time < DATEADD('minute', -20, CURRENT_TIMESTAMP())
+    ))
+    THEN
+        CALL SYSTEM$SEND_EMAIL(
+            'EMAIL_NOTIFICATION',
+            'data-platform-alerts@mycompany.com',
+            'ALERT: Snowflake Replication Group Lag or Failure',
+            'The PROD_FAILOVER_GROUP replication has not completed successfully '
+            || 'in over 20 minutes. RPO may be at risk. Check VW_REPLICATION_HEALTH '
+            || 'and Snowflake status page.'
+        );
+
+ALTER ALERT ALERT_REPLICATION_LAG RESUME;
