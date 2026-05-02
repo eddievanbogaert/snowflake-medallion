@@ -52,11 +52,6 @@ and governance controls — aligned to the **CIS Snowflake Foundations Benchmark
 
 ```
 snowflake-medallion/
-├── .github/
-│   └── workflows/
-│       ├── dbt-ci.yml                  # PR validation: compile, lint, run, test
-│       ├── dbt-production.yml          # Nightly production run with Slack alerts
-│       └── snowflake-deploy.yml        # Infrastructure change deployment
 ├── docs/
 │   ├── architecture/
 │   │   ├── security-model.md           # RBAC hierarchy, masking, RLS, audit
