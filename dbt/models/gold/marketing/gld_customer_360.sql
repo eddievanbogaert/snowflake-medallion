@@ -6,7 +6,10 @@
             'owner': 'data-products',
             'description': 'Customer 360 view — primary data product for Marketing analytics and CRM.',
             'pii_present': true,
-            'row_access_policy': 'DOMAIN_ACCESS_POLICY',
+            'row_access_policy': {
+                'policy': 'FOUNDATION_DB.ROW_POLICIES.DOMAIN_ACCESS_POLICY',
+                'on': ['DATA_DOMAIN']
+            },
             'powerbi_certified': true
         }
     )

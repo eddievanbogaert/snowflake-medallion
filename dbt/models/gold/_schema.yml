@@ -25,10 +25,17 @@ models:
         description: Customer email. Masked for analyst/PBI roles.
         meta:
           pii_category: EMAIL
+          masking_policy: FOUNDATION_DB.MASKING.EMAIL_MASK
       - name: full_name
         description: First + last name. Masked for analyst/PBI roles.
         meta:
           pii_category: NAME
+          masking_policy: FOUNDATION_DB.MASKING.NAME_MASK
+      - name: phone_number
+        description: Customer phone number. Masked for analyst/PBI roles.
+        meta:
+          pii_category: PHONE
+          masking_policy: FOUNDATION_DB.MASKING.PHONE_MASK
       - name: rfm_segment
         description: RFM-derived customer segment (e.g. CHAMPION, AT_RISK).
         tests:
@@ -76,12 +83,12 @@ models:
         tests:
           - not_null
       - name: gross_revenue
-        description: Sum of line totals for delivered orders.
+        description: Pre-discount revenue (quantity × unit price) for delivered/shipped orders.
         tests:
           - dbt_utils.expression_is_true:
               expression: ">= 0"
       - name: net_revenue
-        description: Gross revenue less discounts.
+        description: Revenue after line discounts (sum of line totals).
         tests:
           - dbt_utils.expression_is_true:
               expression: ">= 0"

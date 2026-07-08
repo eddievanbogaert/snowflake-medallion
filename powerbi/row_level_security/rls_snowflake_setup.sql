@@ -2,13 +2,24 @@
 -- rls_snowflake_setup.sql
 -- Apply Snowflake Row Access Policies to gold layer tables for Power BI RLS.
 --
--- This script is the final step after:
+-- ROLE OF THIS SCRIPT vs THE dbt POST-HOOK
+-- -----------------------------------------
+-- Snowflake DROPS attached policies whenever dbt replaces a table, so the
+-- steady-state enforcement is the apply_security_policies() post-hook
+-- (dbt/macros/security_policies.sql), driven by each model's meta. This
+-- script exists for:
+--   • the FIRST application after initial bootstrap (before the next dbt run)
+--   • verification queries for audits and troubleshooting
+-- Keep the policy assignments here in sync with the model meta.
+--
+-- Prerequisites:
 --   1. Gold tables have been created by dbt
---   2. Row access policies have been defined (04_row_access_policies.sql)
+--   2. Row access policies defined (04_row_access_policies.sql) and masking
+--      policies defined (03_column_masking_policies.sql) — those scripts also
+--      grant SECURITYADMIN the account-level APPLY privileges this script needs
 --   3. Power BI OAuth integration is configured (saml_oauth_setup.md)
 --
 -- Run as: SECURITYADMIN
--- Re-run if new gold tables are added.
 -- =============================================================================
 
 USE ROLE SECURITYADMIN;

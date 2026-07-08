@@ -32,10 +32,17 @@ models:
         description: Concatenated first + last name. May be NULL if both source fields are NULL.
         meta:
           pii_category: NAME
+          masking_policy: FOUNDATION_DB.MASKING.NAME_MASK
+      - name: phone_number
+        description: Customer phone number. Normalised in silver; masked per role.
+        meta:
+          pii_category: PHONE
+          masking_policy: FOUNDATION_DB.MASKING.PHONE_MASK
       - name: date_of_birth
         description: Date of birth. Cast from VARCHAR source; NULL if unparseable.
         meta:
           pii_category: DATE_OF_BIRTH
+          masking_policy: FOUNDATION_DB.MASKING.DATE_OF_BIRTH_MASK
       - name: age_band
         description: Non-PII age grouping derived from date_of_birth.
         tests:
@@ -50,7 +57,15 @@ models:
               config:
                 severity: warn
       - name: country_code
-        description: ISO 3166-1 alpha-3 country code.
+        description: >
+          ISO 3166-1 alpha-2 country code (e.g. GB, US, DE) — must match
+          ref_country_regions.country_code, which drives GDPR/residency logic.
+        tests:
+          - relationships:
+              to: ref('ref_country_regions')
+              field: country_code
+              config:
+                severity: warn   # Warn: source may contain codes not yet in the seed
       - name: created_at
         description: UTC timestamp when the customer was created in the source system.
         tests:
@@ -141,6 +156,11 @@ models:
         description: DATE portion of event_timestamp. Used for clustering.
         tests:
           - not_null
+      - name: ip_address
+        description: Client IP address. Personal data under GDPR; masked per role.
+        meta:
+          pii_category: IP_ADDRESS
+          masking_policy: FOUNDATION_DB.MASKING.IP_ADDRESS_MASK
       - name: is_authenticated
         description: TRUE if the user was logged in at event time.
 

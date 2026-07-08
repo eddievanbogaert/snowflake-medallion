@@ -5,7 +5,10 @@
         meta         = {
             'owner': 'data-products',
             'description': 'Product performance scorecard for Operations and Supply Chain.',
-            'row_access_policy': 'DOMAIN_ACCESS_POLICY'
+            'row_access_policy': {
+                'policy': 'FOUNDATION_DB.ROW_POLICIES.DOMAIN_ACCESS_POLICY',
+                'on': ['DATA_DOMAIN']
+            }
         }
     )
 }}

@@ -7,15 +7,18 @@
 --   3. Data residency — restrict rows to specific geographic regions
 --
 -- RLS for Power BI works by:
---   a) Assigning Snowflake roles to AD groups via SAML attribute mapping
---   b) Row access policy checks CURRENT_ROLE() (or CURRENT_USER()) at query time
+--   a) Assigning Snowflake roles to AD groups via SCIM group sync
+--   b) Row access policy checks IS_ROLE_IN_SESSION() / CURRENT_USER() at query time
 --   c) No row-level grants needed; policy is transparent to the BI tool
+--   NOTE: per-user enforcement requires each user to hit Snowflake under their
+--   own identity (DirectQuery + AAD SSO). Import-mode datasets refreshed by the
+--   SVC_POWERBI service account contain whatever that role can see — see
+--   powerbi/saml_oauth_setup.md for the two connectivity models.
 --
 -- Run as: ACCOUNTADMIN
 -- =============================================================================
 
-USE ROLE ACCOUNTADMIN;
-USE DATABASE FOUNDATION_DB;
+USE ROLE SYSADMIN;
 
 CREATE SCHEMA IF NOT EXISTS FOUNDATION_DB.ROW_POLICIES
     COMMENT = 'Holds row access policy objects.';
@@ -23,6 +26,20 @@ CREATE SCHEMA IF NOT EXISTS FOUNDATION_DB.ROW_POLICIES
 GRANT USAGE ON SCHEMA FOUNDATION_DB.ROW_POLICIES TO ROLE SECURITYADMIN;
 GRANT USAGE ON SCHEMA FOUNDATION_DB.ROW_POLICIES TO ROLE DATA_ENGINEER_ROLE;
 GRANT USAGE ON SCHEMA FOUNDATION_DB.ROW_POLICIES TO ROLE TRANSFORMER_ROLE;
+
+-- ---------------------------------------------------------------------------
+-- POLICY ADMINISTRATION PRIVILEGES
+-- SECURITYADMIN owns the policy objects and the tenant mapping table, and can
+-- attach policies to tables it does NOT own via the account-level APPLY ROW
+-- ACCESS POLICY privilege (dbt / TRANSFORMER_ROLE owns the data tables).
+-- ---------------------------------------------------------------------------
+
+USE ROLE ACCOUNTADMIN;
+GRANT CREATE ROW ACCESS POLICY ON SCHEMA FOUNDATION_DB.ROW_POLICIES TO ROLE SECURITYADMIN;
+GRANT CREATE TABLE             ON SCHEMA FOUNDATION_DB.ROW_POLICIES TO ROLE SECURITYADMIN;
+GRANT APPLY ROW ACCESS POLICY ON ACCOUNT TO ROLE SECURITYADMIN;
+-- TRANSFORMER_ROLE re-attaches policies from dbt post-hooks after each rebuild.
+GRANT APPLY ROW ACCESS POLICY ON ACCOUNT TO ROLE TRANSFORMER_ROLE;
 
 USE ROLE SECURITYADMIN;
 
@@ -34,31 +51,22 @@ USE ROLE SECURITYADMIN;
 -- Engineers and analysts see all rows.
 -- ---------------------------------------------------------------------------
 
+-- IS_ROLE_IN_SESSION() (not CURRENT_ROLE()) so that role hierarchy and
+-- secondary roles behave correctly, and so a user granted multiple domain
+-- roles sees the UNION of their domains. Default deny: no clause → FALSE.
 CREATE OR REPLACE ROW ACCESS POLICY FOUNDATION_DB.ROW_POLICIES.DOMAIN_ACCESS_POLICY
     AS (data_domain VARCHAR) RETURNS BOOLEAN ->
-    CASE
-        -- Admins and engineers see everything
-        WHEN CURRENT_ROLE() IN (
-            'ACCOUNTADMIN', 'SYSADMIN', 'DATA_ENGINEER_ROLE',
-            'TRANSFORMER_ROLE', 'DATA_ANALYST_ROLE', 'DATA_SCIENTIST_ROLE'
-        ) THEN TRUE
-
-        -- PowerBI service account sees all rows
-        WHEN CURRENT_ROLE() = 'POWERBI_ROLE' THEN TRUE
-
-        -- Domain-scoped PBI roles see only their domain
-        WHEN CURRENT_ROLE() = 'POWERBI_MARKETING_ROLE'
-            THEN data_domain = 'MARKETING'
-
-        WHEN CURRENT_ROLE() = 'POWERBI_FINANCE_ROLE'
-            THEN data_domain = 'FINANCE'
-
-        WHEN CURRENT_ROLE() = 'POWERBI_OPERATIONS_ROLE'
-            THEN data_domain IN ('OPERATIONS', 'SUPPLY_CHAIN')
-
-        -- Default deny
-        ELSE FALSE
-    END;
+    -- Internal roles and the Power BI gateway service account see everything
+    -- (SYSADMIN / ACCOUNTADMIN inherit these roles)
+       IS_ROLE_IN_SESSION('DATA_ENGINEER_ROLE')
+    OR IS_ROLE_IN_SESSION('TRANSFORMER_ROLE')
+    OR IS_ROLE_IN_SESSION('DATA_ANALYST_ROLE')
+    OR IS_ROLE_IN_SESSION('DATA_SCIENTIST_ROLE')
+    OR IS_ROLE_IN_SESSION('POWERBI_ROLE')
+    -- Domain-scoped PBI roles see only their domain's rows
+    OR (IS_ROLE_IN_SESSION('POWERBI_MARKETING_ROLE')  AND data_domain = 'MARKETING')
+    OR (IS_ROLE_IN_SESSION('POWERBI_FINANCE_ROLE')    AND data_domain = 'FINANCE')
+    OR (IS_ROLE_IN_SESSION('POWERBI_OPERATIONS_ROLE') AND data_domain IN ('OPERATIONS', 'SUPPLY_CHAIN'));
 
 -- ---------------------------------------------------------------------------
 -- POLICY 2: TENANT ISOLATION
@@ -76,28 +84,27 @@ CREATE TABLE IF NOT EXISTS FOUNDATION_DB.ROW_POLICIES.USER_TENANT_MAP (
     PRIMARY KEY (snowflake_user, tenant_id)
 );
 
-GRANT SELECT ON TABLE FOUNDATION_DB.ROW_POLICIES.USER_TENANT_MAP
-    TO ROLE SECURITYADMIN;
-GRANT SELECT ON TABLE FOUNDATION_DB.ROW_POLICIES.USER_TENANT_MAP
-    TO ROLE TRANSFORMER_ROLE;  -- policy must be evaluable by all callers
+-- No SELECT grants are needed for callers: row access policies evaluate the
+-- mapping-table subquery with the POLICY OWNER's rights (SECURITYADMIN, which
+-- owns this table), not the querying user's rights.
 
+-- NOTE: the policy argument is deliberately named ARG_TENANT_ID. If it were
+-- named TENANT_ID, the unqualified reference inside the EXISTS subquery would
+-- bind to UTM.TENANT_ID (making the predicate always true) and every mapped
+-- user would see every tenant's rows.
 CREATE OR REPLACE ROW ACCESS POLICY FOUNDATION_DB.ROW_POLICIES.TENANT_ISOLATION_POLICY
-    AS (tenant_id VARCHAR) RETURNS BOOLEAN ->
-    CASE
-        -- Internal roles see all tenants
-        WHEN CURRENT_ROLE() IN (
-            'ACCOUNTADMIN', 'SYSADMIN', 'DATA_ENGINEER_ROLE', 'TRANSFORMER_ROLE'
-        ) THEN TRUE
-
-        -- External / analyst roles: match tenant via user mapping
-        ELSE EXISTS (
-            SELECT 1
-            FROM FOUNDATION_DB.ROW_POLICIES.USER_TENANT_MAP utm
-            WHERE utm.snowflake_user = CURRENT_USER()
-              AND utm.tenant_id      = tenant_id
-              AND utm.active         = TRUE
-        )
-    END;
+    AS (arg_tenant_id VARCHAR) RETURNS BOOLEAN ->
+    -- Internal roles see all tenants (admins inherit these via hierarchy)
+       IS_ROLE_IN_SESSION('DATA_ENGINEER_ROLE')
+    OR IS_ROLE_IN_SESSION('TRANSFORMER_ROLE')
+    -- External / analyst roles: match tenant via user mapping
+    OR EXISTS (
+        SELECT 1
+        FROM FOUNDATION_DB.ROW_POLICIES.USER_TENANT_MAP utm
+        WHERE utm.snowflake_user = CURRENT_USER()
+          AND utm.tenant_id      = arg_tenant_id
+          AND utm.active         = TRUE
+    );
 
 -- ---------------------------------------------------------------------------
 -- POLICY 3: REGIONAL DATA RESIDENCY
@@ -107,32 +114,35 @@ CREATE OR REPLACE ROW ACCESS POLICY FOUNDATION_DB.ROW_POLICIES.TENANT_ISOLATION_
 
 CREATE OR REPLACE ROW ACCESS POLICY FOUNDATION_DB.ROW_POLICIES.REGION_RESIDENCY_POLICY
     AS (data_region VARCHAR) RETURNS BOOLEAN ->
-    CASE
-        WHEN CURRENT_ROLE() IN (
-            'ACCOUNTADMIN', 'SYSADMIN', 'DATA_ENGINEER_ROLE', 'TRANSFORMER_ROLE'
-        ) THEN TRUE
-
-        -- EU-based analysts see only EU and GLOBAL data
-        WHEN CURRENT_ROLE() IN ('DATA_ANALYST_ROLE', 'DATA_SCIENTIST_ROLE')
-            THEN data_region IN ('EU', 'GLOBAL', 'UK')
-
-        -- Power BI roles see appropriate regional data
-        WHEN CURRENT_ROLE() LIKE 'POWERBI%'
-            THEN data_region IN ('EU', 'GLOBAL', 'UK')
-
-        ELSE FALSE
-    END;
+    -- Internal platform roles see all regions (admins inherit via hierarchy)
+       IS_ROLE_IN_SESSION('DATA_ENGINEER_ROLE')
+    OR IS_ROLE_IN_SESSION('TRANSFORMER_ROLE')
+    -- Analyst and Power BI populations in this deployment are EU-based:
+    -- they see EU, UK, and GLOBAL rows only. Adjust per region rollout,
+    -- or resolve regions from ref_country_regions for finer control.
+    OR (
+        (   IS_ROLE_IN_SESSION('DATA_ANALYST_ROLE')
+         OR IS_ROLE_IN_SESSION('DATA_SCIENTIST_ROLE')
+         OR IS_ROLE_IN_SESSION('POWERBI_ROLE')
+         OR IS_ROLE_IN_SESSION('POWERBI_MARKETING_ROLE')
+         OR IS_ROLE_IN_SESSION('POWERBI_FINANCE_ROLE')
+         OR IS_ROLE_IN_SESSION('POWERBI_OPERATIONS_ROLE')
+        )
+        AND data_region IN ('EU', 'GLOBAL', 'UK')
+    );
 
 -- ---------------------------------------------------------------------------
 -- GRANT APPLY privilege
+-- SECURITYADMIN owns the policies; grant per-policy APPLY to TRANSFORMER_ROLE
+-- so dbt post-hooks can re-attach them whenever a gold table is rebuilt.
 -- ---------------------------------------------------------------------------
 
 GRANT APPLY ON ROW ACCESS POLICY FOUNDATION_DB.ROW_POLICIES.DOMAIN_ACCESS_POLICY
-    TO ROLE SECURITYADMIN;
+    TO ROLE TRANSFORMER_ROLE;
 GRANT APPLY ON ROW ACCESS POLICY FOUNDATION_DB.ROW_POLICIES.TENANT_ISOLATION_POLICY
-    TO ROLE SECURITYADMIN;
+    TO ROLE TRANSFORMER_ROLE;
 GRANT APPLY ON ROW ACCESS POLICY FOUNDATION_DB.ROW_POLICIES.REGION_RESIDENCY_POLICY
-    TO ROLE SECURITYADMIN;
+    TO ROLE TRANSFORMER_ROLE;
 
 -- ---------------------------------------------------------------------------
 -- EXAMPLE POLICY APPLICATION

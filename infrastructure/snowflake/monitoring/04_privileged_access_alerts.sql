@@ -31,44 +31,42 @@ USE ROLE ACCOUNTADMIN;
 -- SHOW NOTIFICATION INTEGRATIONS;
 
 -- ---------------------------------------------------------------------------
--- IMPORTANT: ACCOUNT_USAGE LATENCY WARNING
+-- DESIGN: LATENCY AND GAP HANDLING
 -- ---------------------------------------------------------------------------
--- SNOWFLAKE.ACCOUNT_USAGE views (LOGIN_HISTORY, QUERY_HISTORY) have a built-in
--- latency of 45 minutes to 3 hours. Alerts that query ACCOUNT_USAGE will NOT
--- detect events in near-real-time, even with a 5- or 15-minute schedule.
+-- SNOWFLAKE.ACCOUNT_USAGE views (LOGIN_HISTORY, QUERY_HISTORY) lag 45 minutes
+-- to 3 hours. An alert that queries ACCOUNT_USAGE with a lookback shorter than
+-- that latency will NEVER see the events it is checking for. Every condition
+-- below therefore uses the INFORMATION_SCHEMA table functions (seconds of
+-- latency, 7-day history).
 --
--- For time-critical security signals (break-glass login, ACCOUNTADMIN usage),
--- ALERT 1 and ALERT 5 below use INFORMATION_SCHEMA table functions instead,
--- which are near-real-time (seconds to minutes latency) but limited to the
--- last 7 days of history.
+-- Each condition also filters on LAST_SUCCESSFUL_SCHEDULED_TIME() with a
+-- two-hour scan window, so events that occur while an alert is suspended or
+-- an evaluation fails are still caught by the next successful run.
 --
--- For pattern/text-search alerts (network policy, masking policy changes in
--- ALERT 2 and ALERT 4), the lower bound on ACCOUNT_USAGE latency is acceptable
--- because those events are detected via SQL text scanning and do not require
--- sub-minute detection windows.
+-- All alerts are SERVERLESS (no WAREHOUSE parameter): a 5–15 minute schedule
+-- against ADMIN_WH would keep that warehouse resumed nearly continuously.
 -- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------
 -- ALERT 1: ACCOUNTADMIN USAGE  (CIS 5.3)
--- Uses INFORMATION_SCHEMA.QUERY_HISTORY for near-real-time detection.
--- Fires if ACCOUNTADMIN has been used in the last 15 minutes for anything
--- other than SHOW/DESCRIBE (routine read-only admin operations).
+-- Fires if ACCOUNTADMIN has been used for anything other than
+-- SHOW/DESCRIBE/SELECT since the last successful check.
 -- ---------------------------------------------------------------------------
 
 CREATE ALERT IF NOT EXISTS ALERT_ACCOUNTADMIN_USAGE
-    WAREHOUSE   = ADMIN_WH
-    SCHEDULE    = '15 MINUTES'
+    SCHEDULE = '15 MINUTES'
     IF (EXISTS (
-        -- Use INFORMATION_SCHEMA for near-real-time detection (low latency).
-        -- RESULT_LIMIT capped at 100; sufficient to detect any occurrence.
         SELECT 1
         FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.QUERY_HISTORY(
-            END_TIME_RANGE_START => DATEADD('minute', -15, CURRENT_TIMESTAMP()),
-            END_TIME_RANGE_END   => CURRENT_TIMESTAMP(),
-            RESULT_LIMIT         => 100
+            END_TIME_RANGE_START => DATEADD('hour', -2, CURRENT_TIMESTAMP()),
+            RESULT_LIMIT         => 10000
         ))
         WHERE role_name   = 'ACCOUNTADMIN'
           AND query_type NOT IN ('SHOW', 'DESCRIBE', 'SELECT')
+          AND start_time >= COALESCE(
+                SNOWFLAKE.ALERT.LAST_SUCCESSFUL_SCHEDULED_TIME(),
+                DATEADD('minute', -15, CURRENT_TIMESTAMP())
+              )
     ))
     THEN
         CALL SYSTEM$SEND_EMAIL(
@@ -76,7 +74,7 @@ CREATE ALERT IF NOT EXISTS ALERT_ACCOUNTADMIN_USAGE
             'security-alerts@mycompany.com',
             'SECURITY ALERT: ACCOUNTADMIN Role Used for Privileged Operation',
             'The ACCOUNTADMIN role has been used to execute a non-read-only statement '
-            || 'in the last 15 minutes. This may indicate planned maintenance or a '
+            || 'since the last check. This may indicate planned maintenance or a '
             || 'security incident. Review MONITORING_DB.AUDIT.VW_PRIVILEGED_OPERATIONS '
             || 'filtering role_name = ''ACCOUNTADMIN''.'
         );
@@ -87,19 +85,24 @@ CREATE ALERT IF NOT EXISTS ALERT_ACCOUNTADMIN_USAGE
 -- ---------------------------------------------------------------------------
 
 CREATE ALERT IF NOT EXISTS ALERT_NETWORK_POLICY_CHANGE
-    WAREHOUSE   = ADMIN_WH
-    SCHEDULE    = '15 MINUTES'
+    SCHEDULE = '15 MINUTES'
     IF (EXISTS (
         SELECT 1
-        FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+        FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.QUERY_HISTORY(
+            END_TIME_RANGE_START => DATEADD('hour', -2, CURRENT_TIMESTAMP()),
+            RESULT_LIMIT         => 10000
+        ))
         WHERE (
               query_text ILIKE '%CREATE%NETWORK%POLICY%'
            OR query_text ILIKE '%ALTER%NETWORK%POLICY%'
            OR query_text ILIKE '%DROP%NETWORK%POLICY%'
-           OR query_text ILIKE '%SET%NETWORK%POLICY%'
+           OR query_text ILIKE '%SET%NETWORK_POLICY%'
         )
         AND execution_status = 'SUCCESS'
-        AND start_time >= DATEADD('minute', -15, CURRENT_TIMESTAMP())
+        AND start_time >= COALESCE(
+              SNOWFLAKE.ALERT.LAST_SUCCESSFUL_SCHEDULED_TIME(),
+              DATEADD('minute', -15, CURRENT_TIMESTAMP())
+            )
     ))
     THEN
         CALL SYSTEM$SEND_EMAIL(
@@ -107,8 +110,8 @@ CREATE ALERT IF NOT EXISTS ALERT_NETWORK_POLICY_CHANGE
             'security-alerts@mycompany.com',
             'SECURITY ALERT: Snowflake Network Policy Modified',
             'A Snowflake network policy was created, altered, dropped, or assigned '
-            || 'in the last 15 minutes. If this was not a planned change, review '
-            || 'MONITORING_DB.AUDIT.VW_GRANT_HISTORY and check all network policy '
+            || 'since the last check. If this was not a planned change, review '
+            || 'MONITORING_DB.AUDIT.VW_PRIVILEGED_OPERATIONS and check all network policy '
             || 'assignments immediately (SHOW NETWORK POLICIES; SHOW PARAMETERS LIKE '
             || '''NETWORK_POLICY'' IN ACCOUNT).'
         );
@@ -117,29 +120,35 @@ CREATE ALERT IF NOT EXISTS ALERT_NETWORK_POLICY_CHANGE
 -- ALERT 3: USER / ROLE LIFECYCLE CHANGES  (CIS 6.2)
 -- User creation/deletion, role assignment, and password resets can indicate
 -- privilege escalation or unauthorised account creation.
+-- Note: SCIM-driven changes arrive via the SCIM REST API and do not appear in
+-- QUERY_HISTORY, so no USERADMIN exclusion is needed — anything matching here
+-- was executed via SQL.
 -- ---------------------------------------------------------------------------
 
 CREATE ALERT IF NOT EXISTS ALERT_ROLE_GRANT_CHANGE
-    WAREHOUSE   = ADMIN_WH
-    SCHEDULE    = '15 MINUTES'
+    SCHEDULE = '15 MINUTES'
     IF (EXISTS (
         SELECT 1
-        FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+        FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.QUERY_HISTORY(
+            END_TIME_RANGE_START => DATEADD('hour', -2, CURRENT_TIMESTAMP()),
+            RESULT_LIMIT         => 10000
+        ))
         WHERE query_type IN ('CREATE_USER', 'DROP_USER', 'ALTER_USER',
                              'CREATE_ROLE', 'DROP_ROLE',
                              'GRANT', 'REVOKE')
           AND execution_status = 'SUCCESS'
-          AND start_time >= DATEADD('minute', -15, CURRENT_TIMESTAMP())
-          -- Exclude expected SCIM-driven operations from USERADMIN
-          AND NOT (role_name = 'USERADMIN' AND query_type IN ('CREATE_USER', 'ALTER_USER'))
+          AND start_time >= COALESCE(
+                SNOWFLAKE.ALERT.LAST_SUCCESSFUL_SCHEDULED_TIME(),
+                DATEADD('minute', -15, CURRENT_TIMESTAMP())
+              )
     ))
     THEN
         CALL SYSTEM$SEND_EMAIL(
             'EMAIL_NOTIFICATION',
             'security-alerts@mycompany.com',
             'SECURITY ALERT: Snowflake User/Role/Grant Change Detected',
-            'A user, role, or grant change was executed in the last 15 minutes '
-            || 'by a non-USERADMIN principal (i.e., not a SCIM-driven change). '
+            'A user, role, or grant change was executed via SQL since the last '
+            || 'check (SCIM-provisioned changes do not appear here). '
             || 'Review MONITORING_DB.AUDIT.VW_GRANT_HISTORY and confirm the change '
             || 'was authorised via your change management process.'
         );
@@ -150,18 +159,26 @@ CREATE ALERT IF NOT EXISTS ALERT_ROLE_GRANT_CHANGE
 -- ---------------------------------------------------------------------------
 
 CREATE ALERT IF NOT EXISTS ALERT_MASKING_POLICY_CHANGE
-    WAREHOUSE   = ADMIN_WH
-    SCHEDULE    = '15 MINUTES'
+    SCHEDULE = '15 MINUTES'
     IF (EXISTS (
         SELECT 1
-        FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+        FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.QUERY_HISTORY(
+            END_TIME_RANGE_START => DATEADD('hour', -2, CURRENT_TIMESTAMP()),
+            RESULT_LIMIT         => 10000
+        ))
         WHERE (
               query_text ILIKE '%DROP%MASKING%POLICY%'
            OR query_text ILIKE '%ALTER%MASKING%POLICY%'
            OR query_text ILIKE '%UNSET%MASKING%POLICY%'
         )
+        -- The dbt post-hook re-applies masking policies on every rebuild;
+        -- exclude the transformer service account to avoid alerting on it.
+        AND user_name != 'SVC_DBT_TRANSFORMER'
         AND execution_status = 'SUCCESS'
-        AND start_time >= DATEADD('minute', -15, CURRENT_TIMESTAMP())
+        AND start_time >= COALESCE(
+              SNOWFLAKE.ALERT.LAST_SUCCESSFUL_SCHEDULED_TIME(),
+              DATEADD('minute', -15, CURRENT_TIMESTAMP())
+            )
     ))
     THEN
         CALL SYSTEM$SEND_EMAIL(
@@ -169,7 +186,7 @@ CREATE ALERT IF NOT EXISTS ALERT_MASKING_POLICY_CHANGE
             'security-alerts@mycompany.com,data-platform-alerts@mycompany.com',
             'SECURITY ALERT: Snowflake Masking Policy Modified or Removed',
             'A dynamic data masking policy was altered, dropped, or unset from a '
-            || 'column in the last 15 minutes. This could expose PII data to '
+            || 'column since the last check. This could expose PII data to '
             || 'unauthorised roles. Review MONITORING_DB.AUDIT.VW_MASKING_POLICY_COVERAGE '
             || 'and SNOWFLAKE.ACCOUNT_USAGE.POLICY_REFERENCES immediately.'
         );
@@ -185,18 +202,19 @@ CREATE ALERT IF NOT EXISTS ALERT_MASKING_POLICY_CHANGE
 -- ---------------------------------------------------------------------------
 
 CREATE ALERT IF NOT EXISTS ALERT_BREAKGLASS_LOGIN
-    WAREHOUSE   = ADMIN_WH
-    SCHEDULE    = '5 MINUTES'
+    SCHEDULE = '5 MINUTES'
     IF (EXISTS (
-        -- INFORMATION_SCHEMA.LOGIN_HISTORY_BY_USER is near-real-time (<1 min latency)
-        -- and limited to the last 7 days, which is sufficient for this alert.
         SELECT 1
         FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.LOGIN_HISTORY_BY_USER(
             USER_NAME        => 'ADMIN_BREAKGLASS',   -- Replace with actual break-glass account name
-            TIME_RANGE_START => DATEADD('minute', -5, CURRENT_TIMESTAMP()),
+            TIME_RANGE_START => DATEADD('hour', -2, CURRENT_TIMESTAMP()),
             TIME_RANGE_END   => CURRENT_TIMESTAMP()
         ))
         WHERE is_success = 'YES'
+          AND event_timestamp >= COALESCE(
+                SNOWFLAKE.ALERT.LAST_SUCCESSFUL_SCHEDULED_TIME(),
+                DATEADD('minute', -5, CURRENT_TIMESTAMP())
+              )
     ))
     THEN
         CALL SYSTEM$SEND_EMAIL(
@@ -223,6 +241,7 @@ ALTER ALERT ALERT_BREAKGLASS_LOGIN        RESUME;
 -- AUDIT VIEW: PRIVILEGED OPERATIONS LOG
 -- Centralises visibility into high-risk operations without requiring
 -- DATA_ENGINEER_ROLE to query SNOWFLAKE.ACCOUNT_USAGE directly.
+-- (Long-horizon forensics — ACCOUNT_USAGE latency is fine here.)
 -- ---------------------------------------------------------------------------
 
 USE DATABASE MONITORING_DB;

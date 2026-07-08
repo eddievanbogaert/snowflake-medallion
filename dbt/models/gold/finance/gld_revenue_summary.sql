@@ -5,7 +5,10 @@
         meta         = {
             'owner': 'data-products',
             'description': 'Daily revenue summary for the Finance domain. Certified for P&L reporting.',
-            'row_access_policy': 'DOMAIN_ACCESS_POLICY',
+            'row_access_policy': {
+                'policy': 'FOUNDATION_DB.ROW_POLICIES.DOMAIN_ACCESS_POLICY',
+                'on': ['DATA_DOMAIN']
+            },
             'powerbi_certified': true
         }
     )
@@ -107,9 +110,12 @@ daily_summary AS (
         COUNT(DISTINCT customer_id)                                    AS unique_customers,
         SUM(quantity)                                                  AS total_units_sold,
 
-        -- Revenue
-        SUM(line_total)                                                AS gross_revenue,
-        SUM(line_total * (1 - COALESCE(discount_pct, 0) / 100))       AS net_revenue,
+        -- Revenue. line_total arrives from silver ALREADY NET of line
+        -- discounts (slv_order_items cross-checks this), so gross revenue is
+        -- re-derived from quantity × unit_price. Applying the discount to
+        -- line_total again would double-discount.
+        SUM(quantity * unit_price)                                     AS gross_revenue,
+        SUM(line_total)                                                AS net_revenue,
         SUM(gross_margin)                                              AS gross_margin,
         SUM(allocated_tax)                                             AS tax_collected,
 

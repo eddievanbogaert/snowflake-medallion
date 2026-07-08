@@ -19,6 +19,7 @@ USE ROLE USERADMIN;
 -- SERVICE ACCOUNT: Data Loader (Fivetran / ADF / Snowpipe)
 -- ---------------------------------------------------------------------------
 CREATE USER IF NOT EXISTS SVC_LOADER
+    TYPE                 = SERVICE
     LOGIN_NAME           = 'SVC_LOADER'
     DISPLAY_NAME         = 'Service Account — Data Loader'
     DEFAULT_ROLE         = LOADER_ROLE
@@ -35,6 +36,7 @@ GRANT ROLE LOADER_ROLE TO USER SVC_LOADER;
 -- SERVICE ACCOUNT: dbt Transformer
 -- ---------------------------------------------------------------------------
 CREATE USER IF NOT EXISTS SVC_DBT_TRANSFORMER
+    TYPE                 = SERVICE
     LOGIN_NAME           = 'SVC_DBT_TRANSFORMER'
     DISPLAY_NAME         = 'Service Account — dbt Transformer'
     DEFAULT_ROLE         = TRANSFORMER_ROLE
@@ -50,6 +52,7 @@ GRANT ROLE TRANSFORMER_ROLE TO USER SVC_DBT_TRANSFORMER;
 -- SERVICE ACCOUNT: Power BI Gateway
 -- ---------------------------------------------------------------------------
 CREATE USER IF NOT EXISTS SVC_POWERBI
+    TYPE                 = SERVICE
     LOGIN_NAME           = 'SVC_POWERBI'
     DISPLAY_NAME         = 'Service Account — Power BI Gateway'
     DEFAULT_ROLE         = POWERBI_ROLE
@@ -90,40 +93,30 @@ GRANT ROLE POWERBI_ROLE TO USER SVC_POWERBI;
 -- GRANT ROLE DATA_ANALYST_ROLE TO USER <first>.<last>@mycompany.com;
 
 -- ---------------------------------------------------------------------------
--- PASSWORD POLICY
--- Enforce strong passwords and MFA for any user with a Snowflake password.
+-- EMERGENCY BREAK-GLASS ACCOUNT (template)
+-- The only human-usable account that holds ACCOUNTADMIN. Native password +
+-- MFA (no SSO dependency) so the platform stays administrable during an IdP
+-- outage. Referenced by ALERT_BREAKGLASS_LOGIN
+-- (monitoring/04_privileged_access_alerts.sql) — every login alerts the
+-- security team and must map to a change ticket.
 -- ---------------------------------------------------------------------------
 
-USE ROLE ACCOUNTADMIN;
-
--- Create a password policy (Snowflake Business Critical / Enterprise feature)
-CREATE PASSWORD POLICY IF NOT EXISTS CORPORATE_PASSWORD_POLICY
-    PASSWORD_MIN_LENGTH             = 16
-    PASSWORD_MAX_LENGTH             = 256
-    PASSWORD_MIN_UPPER_CASE_CHARS   = 2
-    PASSWORD_MIN_LOWER_CASE_CHARS   = 2
-    PASSWORD_MIN_NUMERIC_CHARS      = 2
-    PASSWORD_MIN_SPECIAL_CHARS      = 2
-    PASSWORD_MAX_AGE_DAYS           = 90
-    PASSWORD_MAX_RETRIES            = 5
-    PASSWORD_LOCKOUT_TIME_MINS      = 30
-    COMMENT                         = 'Corporate password policy — applies to any Snowflake-native password auth.';
-
--- Apply password policy at the account level
--- ALTER ACCOUNT SET PASSWORD POLICY CORPORATE_PASSWORD_POLICY;
+-- CREATE USER IF NOT EXISTS ADMIN_BREAKGLASS
+--     LOGIN_NAME           = 'ADMIN_BREAKGLASS'
+--     DISPLAY_NAME         = 'Emergency Break-Glass Administrator'
+--     PASSWORD             = '<from-secrets-manager-sealed-envelope>'
+--     MUST_CHANGE_PASSWORD = TRUE
+--     DEFAULT_ROLE         = ACCOUNTADMIN
+--     DEFAULT_WAREHOUSE    = ADMIN_WH
+--     COMMENT              = 'Break-glass ACCOUNTADMIN. Password sealed in secrets manager; every login alerts security.';
+-- GRANT ROLE ACCOUNTADMIN TO USER ADMIN_BREAKGLASS;
+-- After first login: enrol MFA immediately, then apply the strict session policy:
+-- ALTER USER ADMIN_BREAKGLASS SET SESSION POLICY PRIVILEGED_SESSION_POLICY;
 
 -- ---------------------------------------------------------------------------
--- SESSION POLICIES
--- Enforce session timeout and MFA.
+-- PASSWORD AND SESSION POLICIES
+-- Defined once, in 06_password_policies.sql (STRONG_PASSWORD_POLICY,
+-- STANDARD_SESSION_POLICY, PRIVILEGED_SESSION_POLICY) and applied at the
+-- account level there. Do not define per-user policy objects here — a single
+-- authoritative set keeps the CIS 1.3/1.4 evidence trail simple.
 -- ---------------------------------------------------------------------------
-
-CREATE SESSION POLICY IF NOT EXISTS CORPORATE_SESSION_POLICY
-    SESSION_IDLE_TIMEOUT_MINS         = 240   -- 4 hours idle
-    SESSION_UI_IDLE_TIMEOUT_MINS      = 60    -- 1 hour idle in Snowsight
-    COMMENT                           = 'Corporate session policy — idle timeout enforcement.';
-
--- Apply session policy at account level
--- ALTER ACCOUNT SET SESSION POLICY CORPORATE_SESSION_POLICY;
-
--- Apply tighter session policy to service accounts (they should use short-lived tokens)
--- ALTER USER SVC_LOADER SET SESSION POLICY CORPORATE_SESSION_POLICY;

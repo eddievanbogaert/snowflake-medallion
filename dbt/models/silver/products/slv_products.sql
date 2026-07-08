@@ -59,8 +59,10 @@ typed AS (
         CAST(brand_id AS INTEGER)                                       AS brand_id,
         INITCAP({{ empty_string_to_null('TRIM(brand_name)') }})         AS brand_name,
 
-        -- Pricing (cast from DECIMAL; already typed in source but guard with TRY)
-        COALESCE(TRY_TO_NUMBER(unit_cost::VARCHAR, 18, 4), 0)           AS unit_cost,
+        -- Pricing (cast from DECIMAL; already typed in source but guard with TRY).
+        -- unit_cost stays NULL when unknown — coalescing to 0 would silently
+        -- overstate every downstream margin calculation.
+        TRY_TO_NUMBER(unit_cost::VARCHAR, 18, 4)                        AS unit_cost,
         COALESCE(TRY_TO_NUMBER(list_price::VARCHAR, 18, 2), 0)          AS list_price,
 
         -- Derived: gross margin percentage at list price

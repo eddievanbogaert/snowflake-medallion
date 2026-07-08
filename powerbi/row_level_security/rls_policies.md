@@ -32,9 +32,13 @@ Power BI user population can access.
 
 1. **Network Policy** (IP-based) — blocks connections from non-approved IPs
 2. **Role-Based Access** — POWERBI_MARKETING_ROLE can only `SELECT` on `ANALYTICS_DB.MARKETING.*`
-3. **Row Access Policy** — filters rows by `data_domain` at query time
-4. **Column Masking Policy** — masks PII columns based on `CURRENT_ROLE()`
-5. **Power BI Report RLS** — DAX filters as defence-in-depth (does not replace Snowflake RLS)
+3. **Row Access Policy** — filters rows by `data_domain` at query time (per-user
+   only when users hit Snowflake as themselves — DirectQuery + AAD SSO)
+4. **Column Masking Policy** — masks PII columns based on the session's active
+   role hierarchy (`IS_ROLE_IN_SESSION`)
+5. **Power BI Report RLS** — DAX filters. Defence-in-depth under
+   DirectQuery + SSO; the **authoritative** row filter for import-mode
+   datasets refreshed by `SVC_POWERBI` (see saml_oauth_setup.md, Step 5)
 
 ---
 

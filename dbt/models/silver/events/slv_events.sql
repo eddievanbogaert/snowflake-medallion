@@ -113,13 +113,16 @@ typed AS (
 
     FROM deduplicated
     WHERE _row_num = 1
-      -- Filter bot/internal traffic
+      -- Filter bot/internal traffic.
+      -- COALESCE on ip_address matters: NULL LIKE '...' evaluates to NULL,
+      -- and NOT(NULL) is NULL, which would silently DROP every event that
+      -- arrives without an IP address.
       AND NOT (
             LOWER(COALESCE(user_agent, '')) ILIKE '%bot%'
          OR LOWER(COALESCE(user_agent, '')) ILIKE '%crawler%'
          OR LOWER(COALESCE(user_agent, '')) ILIKE '%spider%'
-         OR ip_address LIKE '10.%'          -- Internal RFC1918 traffic
-         OR ip_address LIKE '192.168.%'
+         OR COALESCE(ip_address, '') LIKE '10.%'          -- Internal RFC1918 traffic
+         OR COALESCE(ip_address, '') LIKE '192.168.%'
       )
       -- Reject events with no usable timestamp
       AND (
