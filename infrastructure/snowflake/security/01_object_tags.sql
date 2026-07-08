@@ -17,12 +17,12 @@ USE SCHEMA AUDIT;
 
 -- Data Sensitivity Classification
 CREATE TAG IF NOT EXISTS MONITORING_DB.AUDIT.DATA_SENSITIVITY
-    ALLOWED_VALUES = 'PUBLIC', 'INTERNAL', 'CONFIDENTIAL', 'RESTRICTED'
+    ALLOWED_VALUES 'PUBLIC', 'INTERNAL', 'CONFIDENTIAL', 'RESTRICTED'
     COMMENT = 'Classifies data sensitivity. Drives column masking and access policies.';
 
 -- PII Category — tracks what kind of personal data is in a column
 CREATE TAG IF NOT EXISTS MONITORING_DB.AUDIT.PII_CATEGORY
-    ALLOWED_VALUES =
+    ALLOWED_VALUES
         'NONE',
         'NAME',
         'EMAIL',
@@ -39,22 +39,22 @@ CREATE TAG IF NOT EXISTS MONITORING_DB.AUDIT.PII_CATEGORY
 
 -- Regulatory compliance scope
 CREATE TAG IF NOT EXISTS MONITORING_DB.AUDIT.COMPLIANCE_SCOPE
-    ALLOWED_VALUES = 'GDPR', 'CCPA', 'PCI_DSS', 'HIPAA', 'SOC2', 'NONE'
+    ALLOWED_VALUES 'GDPR', 'CCPA', 'PCI_DSS', 'HIPAA', 'SOC2', 'NONE'
     COMMENT = 'Regulatory frameworks this data falls under.';
 
 -- Source system lineage
 CREATE TAG IF NOT EXISTS MONITORING_DB.AUDIT.SOURCE_SYSTEM
-    ALLOWED_VALUES = 'SQLSERVER', 'S3', 'SNOWFLAKE_NATIVE', 'MANUAL', 'DERIVED'
+    ALLOWED_VALUES 'SQLSERVER', 'S3', 'SNOWFLAKE_NATIVE', 'MANUAL', 'DERIVED'
     COMMENT = 'Tracks the originating system for this table or column.';
 
 -- Data domain
 CREATE TAG IF NOT EXISTS MONITORING_DB.AUDIT.DATA_DOMAIN
-    ALLOWED_VALUES = 'CUSTOMER', 'ORDER', 'PRODUCT', 'FINANCE', 'MARKETING', 'OPERATIONS', 'REFERENCE'
+    ALLOWED_VALUES 'CUSTOMER', 'ORDER', 'PRODUCT', 'FINANCE', 'MARKETING', 'OPERATIONS', 'REFERENCE'
     COMMENT = 'Business domain classification for data governance catalogue.';
 
 -- Data product layer
 CREATE TAG IF NOT EXISTS MONITORING_DB.AUDIT.MEDALLION_LAYER
-    ALLOWED_VALUES = 'BRONZE', 'SILVER', 'GOLD'
+    ALLOWED_VALUES 'BRONZE', 'SILVER', 'GOLD'
     COMMENT = 'Medallion architecture layer this object belongs to.';
 
 -- ---------------------------------------------------------------------------
@@ -63,8 +63,10 @@ CREATE TAG IF NOT EXISTS MONITORING_DB.AUDIT.MEDALLION_LAYER
 
 USE ROLE SECURITYADMIN;
 
-GRANT APPLY TAG ON ACCOUNT TO ROLE ACCOUNTADMIN;
 GRANT APPLY TAG ON ACCOUNT TO ROLE SYSADMIN;
+-- TRANSFORMER_ROLE re-applies PII_CATEGORY tags from dbt post-hooks whenever
+-- a table is rebuilt (CREATE OR REPLACE TABLE drops tags along with policies)
+GRANT APPLY TAG ON ACCOUNT TO ROLE TRANSFORMER_ROLE;
 
 -- Allow TRANSFORMER_ROLE to read tag values (needed for masking policy evaluation)
 GRANT USAGE ON DATABASE MONITORING_DB TO ROLE TRANSFORMER_ROLE;

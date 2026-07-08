@@ -85,9 +85,10 @@ CREATE SESSION POLICY IF NOT EXISTS PRIVILEGED_SESSION_POLICY
 ALTER ACCOUNT SET PASSWORD POLICY STRONG_PASSWORD_POLICY;
 ALTER ACCOUNT SET SESSION POLICY STANDARD_SESSION_POLICY;
 
--- Apply stricter session timeout to ACCOUNTADMIN users (set in 04_users.sql)
+-- Apply the stricter session policy per-user to any account with an admin role
+-- (e.g. the break-glass ACCOUNTADMIN user, if one exists).
 -- Example — uncomment and replace with actual admin user names:
--- ALTER USER ADMIN_BREAKGLASS SET SESSION POLICY = PRIVILEGED_SESSION_POLICY;
+-- ALTER USER ADMIN_BREAKGLASS SET SESSION POLICY PRIVILEGED_SESSION_POLICY;
 
 -- ---------------------------------------------------------------------------
 -- VERIFY

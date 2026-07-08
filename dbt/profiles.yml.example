@@ -23,7 +23,7 @@ snowflake_medallion:
       # Role, warehouse, database
       role: "{{ env_var('SNOWFLAKE_ROLE', 'DATA_ENGINEER_ROLE') }}"
       warehouse: TRANSFORM_WH
-      database: FOUNDATION_DB        # Default target DB; overridden per model via dbt_project.yml
+      database: DEV_DB               # Dev sandbox — all layers build here (see dbt_project.yml)
       schema: "DBT_DEV_{{ env_var('USER', 'unknown') }}"  # e.g. DBT_DEV_jsmith — per-dev isolation
 
       threads: 8

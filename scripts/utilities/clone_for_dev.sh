@@ -43,7 +43,9 @@ DEV_USER="${CLONE_SUFFIX:-$(git config user.email 2>/dev/null | cut -d@ -f1 | tr
 DEV_USER="${DEV_USER:-${USER:-dev}}"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M)
-CLONE_NAME="DEV_${DEV_USER^^}_${TARGET_NAME##*.}_${TIMESTAMP}"
+# tr (not ${var^^}) for uppercasing — macOS ships bash 3.2, which lacks ^^
+DEV_USER_UPPER=$(printf '%s' "$DEV_USER" | tr '[:lower:]' '[:upper:]')
+CLONE_NAME="DEV_${DEV_USER_UPPER}_${TARGET_NAME##*.}_${TIMESTAMP}"
 
 echo "Creating zero-copy clone..."
 echo "  Source : ${TARGET_TYPE} ${TARGET_NAME}"
@@ -60,12 +62,13 @@ if [ "$TARGET_TYPE" = "SCHEMA" ]; then
         SELECT 'Clone created: DEV_DB.${CLONE_NAME}' AS result;
     "
 else
+    # CLONE_NAME already carries the DEV_ prefix
     SQL="
         USE ROLE DATA_ENGINEER_ROLE;
-        CREATE DATABASE IF NOT EXISTS DEV_${CLONE_NAME}
+        CREATE DATABASE IF NOT EXISTS ${CLONE_NAME}
             CLONE ${TARGET_NAME}
             DATA_RETENTION_TIME_IN_DAYS = 0;
-        SELECT 'Clone created: DEV_${CLONE_NAME}' AS result;
+        SELECT 'Clone created: ${CLONE_NAME}' AS result;
     "
 fi
 
@@ -81,12 +84,12 @@ echo "  USE ROLE DATA_ENGINEER_ROLE;"
 if [ "$TARGET_TYPE" = "SCHEMA" ]; then
     echo "  USE SCHEMA DEV_DB.${CLONE_NAME};"
 else
-    echo "  USE DATABASE DEV_${CLONE_NAME};"
+    echo "  USE DATABASE ${CLONE_NAME};"
 fi
 echo ""
 echo "Remember to drop the clone when done:"
 if [ "$TARGET_TYPE" = "SCHEMA" ]; then
     echo "  DROP SCHEMA DEV_DB.${CLONE_NAME};"
 else
-    echo "  DROP DATABASE DEV_${CLONE_NAME};"
+    echo "  DROP DATABASE ${CLONE_NAME};"
 fi

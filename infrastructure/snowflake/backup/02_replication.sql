@@ -100,21 +100,28 @@ ALTER DATABASE FOUNDATION_DB
 -- REPLICATION MONITORING
 -- ---------------------------------------------------------------------------
 
--- Check replication status and lag
-CREATE OR REPLACE VIEW MONITORING_DB.AUDIT.VW_REPLICATION_STATUS AS
-SELECT
-    name                    AS database_name,
-    replication_allowed_to_accounts,
-    failover_allowed_to_accounts,
-    primary,
-    is_primary,
-    created_on
-FROM SNOWFLAKE.ACCOUNT_USAGE.DATABASES
-WHERE replication_allowed_to_accounts IS NOT NULL
-   OR is_primary = TRUE
-ORDER BY name;
+-- Replication status (primary/secondary, allowed target accounts) comes from
+-- SHOW REPLICATION DATABASES. SHOW output cannot be wrapped in a view —
+-- ACCOUNT_USAGE.DATABASES does not carry replication columns — so run ad hoc:
+--
+-- SHOW REPLICATION DATABASES;
+-- SELECT "name", "is_primary", "primary",
+--        "replication_allowed_to_accounts", "failover_allowed_to_accounts"
+-- FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
 
-GRANT SELECT ON VIEW MONITORING_DB.AUDIT.VW_REPLICATION_STATUS
+-- Replication cost and volume per database (viewable — ACCOUNT_USAGE):
+CREATE OR REPLACE VIEW MONITORING_DB.AUDIT.VW_REPLICATION_COST AS
+SELECT
+    database_name,
+    TO_DATE(start_time)                       AS usage_date,
+    SUM(credits_used)                         AS credits_used,
+    SUM(bytes_transferred) / POWER(1024, 3)   AS gb_transferred
+FROM SNOWFLAKE.ACCOUNT_USAGE.REPLICATION_USAGE_HISTORY
+WHERE start_time >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+GROUP BY database_name, TO_DATE(start_time)
+ORDER BY usage_date DESC, credits_used DESC;
+
+GRANT SELECT ON VIEW MONITORING_DB.AUDIT.VW_REPLICATION_COST
     TO ROLE DATA_ENGINEER_ROLE;
 
 -- View replication lag (run on secondary account)

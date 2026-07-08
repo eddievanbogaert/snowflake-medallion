@@ -55,7 +55,7 @@ SELECT
     _fivetran_deleted,
     _fivetran_id
 
-FROM {{ source('sqlserver_raw', 'brz_sqlserver_customers') }}
+FROM {{ source('sqlserver_raw', 'customers') }}
 
 -- Exclude soft-deletes from active views (soft-deleted rows are handled in silver via SCD snapshot)
 WHERE (_fivetran_deleted IS NULL OR _fivetran_deleted = FALSE)

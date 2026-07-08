@@ -10,7 +10,7 @@
 --      product catalogue maintained centrally).
 --   3. Distributing platform-wide monitoring data (cost, quality alerts) to
 --      a centralised governance account.
---   4. Snowflake Marketplace publishing (if data products are monetised).
+--   4. Snowflake Marketplace publishing (if data products are monetized).
 --
 -- HOW IT WORKS
 -- ------------
@@ -98,14 +98,61 @@ GRANT SELECT ON ALL TABLES IN SCHEMA FOUNDATION_DB.REFERENCE TO SHARE REFERENCE_
 -- without requiring direct access to the production account.
 -- ---------------------------------------------------------------------------
 
+-- SHARING RESTRICTIONS that shape this section:
+--   1. Only SECURE views (and tables) can be granted to a share.
+--   2. Objects that reference an imported database — including all of the
+--      MONITORING_DB views built over SNOWFLAKE.ACCOUNT_USAGE — cannot be
+--      shared at all ("cannot re-share a share").
+-- So: materialise the cost data into a LOCAL table on a schedule, then share
+-- SECURE views over local tables only.
+
+USE ROLE ACCOUNTADMIN;   -- owns the monitoring views/tables created earlier
+
 CREATE SHARE IF NOT EXISTS MONITORING_SHARE
     COMMENT = 'Production audit and cost data shared to central governance account.';
 
-GRANT USAGE  ON DATABASE MONITORING_DB                          TO SHARE MONITORING_SHARE;
-GRANT USAGE  ON SCHEMA   MONITORING_DB.COST_MANAGEMENT          TO SHARE MONITORING_SHARE;
-GRANT USAGE  ON SCHEMA   MONITORING_DB.DATA_QUALITY             TO SHARE MONITORING_SHARE;
-GRANT SELECT ON ALL VIEWS IN SCHEMA MONITORING_DB.COST_MANAGEMENT TO SHARE MONITORING_SHARE;
-GRANT SELECT ON ALL VIEWS IN SCHEMA MONITORING_DB.DATA_QUALITY   TO SHARE MONITORING_SHARE;
+-- Local snapshot of daily credit usage (refreshed daily; source view reads
+-- ACCOUNT_USAGE, so the share exposes this local copy instead)
+CREATE TABLE IF NOT EXISTS MONITORING_DB.COST_MANAGEMENT.CREDIT_USAGE_DAILY (
+    usage_date              DATE,
+    warehouse_name          VARCHAR(255),
+    credits_used            NUMBER(38, 9),
+    credits_compute         NUMBER(38, 9),
+    credits_cloud_services  NUMBER(38, 9),
+    estimated_cost_usd      NUMBER(38, 2),
+    refreshed_at            TIMESTAMP_NTZ
+);
+
+CREATE TASK IF NOT EXISTS MONITORING_DB.COST_MANAGEMENT.TASK_REFRESH_CREDIT_USAGE_DAILY
+    WAREHOUSE = ADMIN_WH
+    SCHEDULE  = 'USING CRON 0 6 * * * UTC'   -- daily, after ACCOUNT_USAGE latency window
+    COMMENT   = 'Materialises VW_DAILY_CREDIT_USAGE into a local, shareable table.'
+AS
+    INSERT OVERWRITE INTO MONITORING_DB.COST_MANAGEMENT.CREDIT_USAGE_DAILY
+    SELECT
+        usage_date,
+        warehouse_name,
+        credits_used,
+        credits_compute,
+        credits_cloud_services,
+        estimated_cost_usd,
+        CURRENT_TIMESTAMP()
+    FROM MONITORING_DB.COST_MANAGEMENT.VW_DAILY_CREDIT_USAGE;
+
+-- ALTER TASK MONITORING_DB.COST_MANAGEMENT.TASK_REFRESH_CREDIT_USAGE_DAILY RESUME;
+
+-- Secure views over LOCAL objects — these are shareable
+CREATE OR REPLACE SECURE VIEW MONITORING_DB.COST_MANAGEMENT.SV_CREDIT_USAGE_DAILY AS
+SELECT * FROM MONITORING_DB.COST_MANAGEMENT.CREDIT_USAGE_DAILY;
+
+CREATE OR REPLACE SECURE VIEW MONITORING_DB.DATA_QUALITY.SV_DBT_TEST_RESULTS AS
+SELECT * FROM MONITORING_DB.DATA_QUALITY.DBT_TEST_RESULTS;
+
+GRANT USAGE  ON DATABASE MONITORING_DB                  TO SHARE MONITORING_SHARE;
+GRANT USAGE  ON SCHEMA   MONITORING_DB.COST_MANAGEMENT  TO SHARE MONITORING_SHARE;
+GRANT USAGE  ON SCHEMA   MONITORING_DB.DATA_QUALITY     TO SHARE MONITORING_SHARE;
+GRANT SELECT ON VIEW MONITORING_DB.COST_MANAGEMENT.SV_CREDIT_USAGE_DAILY TO SHARE MONITORING_SHARE;
+GRANT SELECT ON VIEW MONITORING_DB.DATA_QUALITY.SV_DBT_TEST_RESULTS      TO SHARE MONITORING_SHARE;
 
 -- NOTE: MONITORING_DB.AUDIT is intentionally excluded from the share.
 -- Audit logs contain sensitive login and query history; expose only to

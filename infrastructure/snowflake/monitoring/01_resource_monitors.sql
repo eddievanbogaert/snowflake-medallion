@@ -19,12 +19,18 @@ USE ROLE ACCOUNTADMIN;
 -- Adjust CREDIT_QUOTA to match your contracted monthly credit allowance.
 -- ---------------------------------------------------------------------------
 
+-- NOTE on notifications: NOTIFY_USERS takes SNOWFLAKE USERNAMES (not email
+-- addresses); each listed user must have a verified email and notifications
+-- enabled in their Snowsight preferences. Account administrators can also
+-- opt in to receive all resource monitor notifications without being listed.
+-- Add users after bootstrap, e.g.:
+--   ALTER RESOURCE MONITOR ACCOUNT_MONTHLY_MONITOR SET NOTIFY_USERS = ('JSMITH', 'BILLING_ADMIN');
+
 CREATE RESOURCE MONITOR IF NOT EXISTS ACCOUNT_MONTHLY_MONITOR
     WITH
         CREDIT_QUOTA      = 5000            -- Adjust to your monthly contracted credits
         FREQUENCY         = MONTHLY
         START_TIMESTAMP   = IMMEDIATELY
-        NOTIFY_USERS      = ('ACCOUNTADMIN_USER', 'billing@mycompany.com')  -- Replace with real users/emails
     TRIGGERS
         ON 50  PERCENT DO NOTIFY           -- Email alert at 50%
         ON 75  PERCENT DO NOTIFY           -- Email alert at 75%
@@ -43,7 +49,6 @@ CREATE RESOURCE MONITOR IF NOT EXISTS INGESTION_WH_MONITOR
         CREDIT_QUOTA    = 200
         FREQUENCY       = MONTHLY
         START_TIMESTAMP = IMMEDIATELY
-        NOTIFY_USERS    = ('ACCOUNTADMIN_USER')
     TRIGGERS
         ON 75  PERCENT DO NOTIFY
         ON 100 PERCENT DO SUSPEND;  -- Suspend (not immediate) to let running loads finish
@@ -60,7 +65,6 @@ CREATE RESOURCE MONITOR IF NOT EXISTS TRANSFORM_WH_MONITOR
         CREDIT_QUOTA    = 500
         FREQUENCY       = MONTHLY
         START_TIMESTAMP = IMMEDIATELY
-        NOTIFY_USERS    = ('ACCOUNTADMIN_USER')
     TRIGGERS
         ON 60  PERCENT DO NOTIFY
         ON 80  PERCENT DO NOTIFY
@@ -78,7 +82,6 @@ CREATE RESOURCE MONITOR IF NOT EXISTS ANALYTICS_WH_MONITOR
         CREDIT_QUOTA    = 1000
         FREQUENCY       = MONTHLY
         START_TIMESTAMP = IMMEDIATELY
-        NOTIFY_USERS    = ('ACCOUNTADMIN_USER')
     TRIGGERS
         ON 50  PERCENT DO NOTIFY
         ON 75  PERCENT DO NOTIFY
@@ -96,7 +99,6 @@ CREATE RESOURCE MONITOR IF NOT EXISTS DATASCIENCE_WH_MONITOR
         CREDIT_QUOTA    = 300
         FREQUENCY       = MONTHLY
         START_TIMESTAMP = IMMEDIATELY
-        NOTIFY_USERS    = ('ACCOUNTADMIN_USER')
     TRIGGERS
         ON 75  PERCENT DO NOTIFY
         ON 100 PERCENT DO SUSPEND_IMMEDIATE;  -- DS jobs can be terminated mid-run

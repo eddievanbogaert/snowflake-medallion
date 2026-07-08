@@ -1,4 +1,4 @@
-{% macro not_null_proportion(column_name, min_proportion=0.95) %}
+{% test not_null_proportion(model, column_name, min_proportion=0.95) %}
     {#
         Custom generic test: asserts that at least min_proportion of rows
         have a non-null value for column_name.
@@ -7,50 +7,64 @@
         Usage in schema.yml:
             columns:
               - name: email_address
-                tests:
+                data_tests:
                   - not_null_proportion:
                       min_proportion: 0.90
     #}
+    WITH stats AS (
+        SELECT
+            COUNT(*)                                                        AS total_rows,
+            SUM(CASE WHEN {{ column_name }} IS NOT NULL THEN 1 ELSE 0 END)  AS non_null_rows
+        FROM {{ model }}
+    )
     SELECT
-        COUNT(*) AS total_rows,
-        SUM(CASE WHEN {{ column_name }} IS NOT NULL THEN 1 ELSE 0 END) AS non_null_rows,
-        ROUND(
-            SUM(CASE WHEN {{ column_name }} IS NOT NULL THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0),
-            4
-        ) AS actual_proportion,
-        {{ min_proportion }} AS min_required_proportion
-    FROM {{ model }}
-    HAVING actual_proportion < min_required_proportion
-{% endmacro %}
+        total_rows,
+        non_null_rows,
+        ROUND(non_null_rows * 1.0 / NULLIF(total_rows, 0), 4)  AS actual_proportion,
+        {{ min_proportion }}                                   AS min_required_proportion
+    FROM stats
+    WHERE non_null_rows * 1.0 / NULLIF(total_rows, 0) < {{ min_proportion }}
+{% endtest %}
 
 
-{% macro assert_row_count_between(min_rows, max_rows=none) %}
+{% test row_count_between(model, min_rows=1, max_rows=none) %}
     {#
-        Custom singular test: asserts the model has at least min_rows rows,
+        Custom generic test: asserts the model has at least min_rows rows,
         and optionally no more than max_rows.
         Useful for catching empty loads or data explosions.
+
+        Usage in schema.yml (model-level):
+            data_tests:
+              - row_count_between:
+                  min_rows: 1000
+                  max_rows: 100000000
     #}
-    SELECT COUNT(*) AS row_count
-    FROM {{ model }}
-    HAVING row_count < {{ min_rows }}
-    {% if max_rows %}
-        OR row_count > {{ max_rows }}
+    WITH stats AS (
+        SELECT COUNT(*) AS row_count
+        FROM {{ model }}
+    )
+    SELECT row_count
+    FROM stats
+    WHERE row_count < {{ min_rows }}
+    {% if max_rows is not none %}
+       OR row_count > {{ max_rows }}
     {% endif %}
-{% endmacro %}
+{% endtest %}
 
 
-{% macro test_no_duplicate_pk(model, pk_column) %}
+{% test no_duplicate_pk(model, column_name) %}
     {#
-        Returns rows that represent duplicate primary keys.
-        Used as a singular test.
+        Custom generic test: returns rows that represent duplicate primary keys.
+        Equivalent to the built-in `unique` test, but reports the duplicate
+        count per key, which is more useful when triaging bad loads.
     #}
     SELECT
-        {{ pk_column }},
+        {{ column_name }},
         COUNT(*) AS occurrence_count
     FROM {{ model }}
-    GROUP BY {{ pk_column }}
+    GROUP BY {{ column_name }}
     HAVING COUNT(*) > 1
-{% endmacro %}
+{% endtest %}
 
 
 {% macro get_column_stats(relation, column_name) %}
@@ -70,23 +84,42 @@
 {% endmacro %}
 
 
-{% macro log_dbt_test_result(test_name, model_name, status, failures, message) %}
+{% macro log_test_results(results) %}
     {#
-        Called from an on-run-end hook to persist test results to MONITORING_DB.
-        Example hook in dbt_project.yml:
+        on-run-end hook: persists every test result of the invocation to
+        MONITORING_DB.DATA_QUALITY.DBT_TEST_RESULTS, which feeds the
+        ALERT_DBT_TEST_FAILURES Snowflake alert (monitoring/03_alerts.sql).
+
+        Wired in dbt_project.yml:
           on-run-end:
-            - "{{ log_dbt_test_result(...) }}"
-        In practice, use an on-run-end macro that iterates over results.
+            - "{{ log_test_results(results) }}"
+
+        Prod-only: the results table lives in MONITORING_DB, which only the
+        prod TRANSFORMER_ROLE can write to. Dev/CI runs skip logging.
     #}
-    INSERT INTO MONITORING_DB.DATA_QUALITY.DBT_TEST_RESULTS
-        (run_id, node_id, test_name, model_name, status, failures, message)
-    VALUES (
-        '{{ invocation_id }}',
-        '{{ test_name }}',
-        '{{ test_name }}',
-        '{{ model_name }}',
-        '{{ status }}',
-        {{ failures | default(0) }},
-        '{{ message | replace("'", "''") }}'
-    );
+    {% if execute and target.name == 'prod' %}
+        {% set test_results = results | selectattr('node.resource_type', 'equalto', 'test') | list %}
+        {% if test_results | length > 0 %}
+            {% set value_rows = [] %}
+            {% for res in test_results %}
+                {% set model_name = (res.node.attached_node or '').split('.')[-1] %}
+                {% set message = (res.message or '') | replace("'", "''") | truncate(1900, True) %}
+                {% do value_rows.append(
+                    "('"  ~ invocation_id ~ "'"
+                    ~ ",'" ~ res.node.unique_id ~ "'"
+                    ~ ",'" ~ res.node.name ~ "'"
+                    ~ ",'" ~ model_name ~ "'"
+                    ~ ",'" ~ res.status ~ "'"
+                    ~ ","  ~ (res.failures if res.failures is not none else 0)
+                    ~ ",'" ~ message ~ "')"
+                ) %}
+            {% endfor %}
+            {% do run_query(
+                "INSERT INTO MONITORING_DB.DATA_QUALITY.DBT_TEST_RESULTS "
+                ~ "(run_id, node_id, test_name, model_name, status, failures, message) VALUES "
+                ~ value_rows | join(', ')
+            ) %}
+            {{ log("Logged " ~ value_rows | length ~ " test results to MONITORING_DB.DATA_QUALITY.DBT_TEST_RESULTS", info=True) }}
+        {% endif %}
+    {% endif %}
 {% endmacro %}

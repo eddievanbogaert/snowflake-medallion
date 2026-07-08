@@ -28,8 +28,10 @@ sources:
       warn_after: {count: 4, period: hour}
       error_after: {count: 26, period: hour}
 
+    # Landing tables carry the plain source names (as Fivetran creates them).
+    # The dbt-managed bronze views over them use the brz_sqlserver_* naming.
     tables:
-      - name: brz_sqlserver_customers
+      - name: customers
         description: Raw customer master data from dbo.Customers.
         columns:
           - name: customer_id
@@ -41,7 +43,7 @@ sources:
           - name: _fivetran_deleted
             description: TRUE if the row was deleted in the source system.
 
-      - name: brz_sqlserver_orders
+      - name: orders
         description: Raw order headers from dbo.Orders.
         columns:
           - name: order_id
@@ -49,10 +51,10 @@ sources:
           - name: customer_id
             description: FK to Customers.
 
-      - name: brz_sqlserver_order_items
+      - name: order_items
         description: Raw order line items from dbo.OrderItems.
 
-      - name: brz_sqlserver_products
+      - name: products
         description: Raw product catalogue from dbo.Products.
         freshness:
           warn_after: {count: 26, period: hour}  # Products change infrequently

@@ -15,5 +15,5 @@ SELECT
 FROM {{ ref('slv_customers') }} c
 LEFT JOIN {{ ref('gld_customer_360') }} g
     ON g.customer_id = c.customer_id
-WHERE c.customer_status IN ('ACTIVE', 'PROSPECT', 'DEVELOPING')
+WHERE c.customer_status IN ('ACTIVE', 'PROSPECT')
   AND g.customer_id IS NULL

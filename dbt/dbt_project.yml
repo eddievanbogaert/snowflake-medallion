@@ -18,6 +18,12 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
+# Persist test results to MONITORING_DB.DATA_QUALITY.DBT_TEST_RESULTS so the
+# ALERT_DBT_TEST_FAILURES Snowflake alert can fire (prod target only —
+# see macros/data_quality_macros.sql).
+on-run-end:
+  - "{{ log_test_results(results) }}"
+
 # ============================================================
 # Model Configurations
 # Snowflake-specific: database, schema, and materialisation
@@ -26,15 +32,23 @@ clean-targets:
 # the target schema name.
 # ============================================================
 
+# In prod, each layer lands in its dedicated database. In dev/CI, everything
+# builds inside the target's sandbox database (DEV_DB / TEST_DB) so developer
+# and CI roles never need DDL privileges on the production databases.
+# Schema isolation per developer is handled by macros/generate_schema_name.sql.
+
 models:
   snowflake_medallion:
 
     # ----------------------------------------------------------
     # BRONZE LAYER
+    # Views live in their own BRONZE schema — never in the raw landing
+    # schemas — so dbt-managed objects cannot collide with (or require
+    # write access to) the loader-managed landing tables.
     # ----------------------------------------------------------
     bronze:
-      +database: RAW_DB
-      +schema: bronze_staging        # dbt uses this as a scratch area; final tables defined per sub-folder
+      +database: "{{ 'RAW_DB' if target.name == 'prod' else target.database }}"
+      +schema: BRONZE
       +materialized: view            # Bronze models are thin views over raw landing tables
       +tags: ['bronze']
       +meta:
@@ -43,22 +57,22 @@ models:
         pii_review_required: false   # Review per-model; bronze is raw/unmasked
 
       sqlserver:
-        +schema: SQLSERVER_RAW
         +tags: ['bronze', 'sqlserver']
 
       s3:
-        +schema: S3_RAW
         +tags: ['bronze', 's3']
 
       snowflake_native:
-        +schema: SNOWFLAKE_NATIVE_RAW
         +tags: ['bronze', 'native']
 
     # ----------------------------------------------------------
     # SILVER LAYER
     # ----------------------------------------------------------
     silver:
-      +database: FOUNDATION_DB
+      +database: "{{ 'FOUNDATION_DB' if target.name == 'prod' else target.database }}"
+      # Re-attach masking / row access policies after every build — Snowflake
+      # drops them when dbt replaces a table (see macros/security_policies.sql)
+      +post-hook: "{{ apply_security_policies() }}"
       +materialized: incremental
       +incremental_strategy: merge
       +on_schema_change: fail        # Fail loudly if source schema changes
@@ -94,7 +108,10 @@ models:
     # GOLD LAYER
     # ----------------------------------------------------------
     gold:
-      +database: ANALYTICS_DB
+      +database: "{{ 'ANALYTICS_DB' if target.name == 'prod' else target.database }}"
+      # Re-attach masking / row access policies after every build — Snowflake
+      # drops them when dbt replaces a table (see macros/security_policies.sql)
+      +post-hook: "{{ apply_security_policies() }}"
       +materialized: table
       +tags: ['gold']
       +meta:
@@ -114,20 +131,32 @@ models:
         +schema: OPERATIONS
         +tags: ['gold', 'operations']
 
+      ai:
+        +schema: AI
+        +tags: ['gold', 'ai']
+
       executive:
         +schema: EXECUTIVE
         +tags: ['gold', 'executive']
+
+  # ----------------------------------------------------------
+  # ELEMENTARY (observability package)
+  # Routes Elementary's artefact models to the monitoring database
+  # instead of the default target schema.
+  # ----------------------------------------------------------
+  elementary:
+    +database: "{{ 'MONITORING_DB' if target.name == 'prod' else target.database }}"
+    +schema: ELEMENTARY
 
 # ============================================================
 # Snapshot Configurations
 # ============================================================
 snapshots:
   snowflake_medallion:
-    +database: FOUNDATION_DB
-    +schema: SNAPSHOTS
+    +target_database: "{{ 'FOUNDATION_DB' if target.name == 'prod' else target.database }}"
+    +target_schema: SNAPSHOTS
     +strategy: timestamp
     +updated_at: updated_at
-    +target_schema: SNAPSHOTS
     +tags: ['snapshot']
 
 # ============================================================
@@ -135,17 +164,21 @@ snapshots:
 # ============================================================
 seeds:
   snowflake_medallion:
-    +database: FOUNDATION_DB
+    +database: "{{ 'FOUNDATION_DB' if target.name == 'prod' else target.database }}"
     +schema: REFERENCE
     +tags: ['seed', 'reference']
 
 # ============================================================
-# Tests
+# Data Tests
+# Failed rows are stored for investigation. In prod they land in
+# MONITORING_DB.DATA_QUALITY (TRANSFORMER_ROLE is granted CREATE TABLE
+# there in 03_roles.sql); in dev/CI they stay in the sandbox database.
 # ============================================================
-tests:
+data_tests:
   snowflake_medallion:
     +store_failures: true
-    +schema: MONITORING_DB.DATA_QUALITY  # Store failed test rows for investigation
+    +database: "{{ 'MONITORING_DB' if target.name == 'prod' else target.database }}"
+    +schema: DATA_QUALITY
     +limit: 500                          # Cap rows stored per test failure
 
 # ============================================================

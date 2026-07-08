@@ -23,5 +23,5 @@ SELECT
     _fivetran_synced,
     _fivetran_deleted,
     _fivetran_id
-FROM {{ source('sqlserver_raw', 'brz_sqlserver_products') }}
+FROM {{ source('sqlserver_raw', 'products') }}
 WHERE (_fivetran_deleted IS NULL OR _fivetran_deleted = FALSE)

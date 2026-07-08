@@ -85,11 +85,14 @@ GRANT USAGE ON ALL STAGES IN SCHEMA RAW_DB.S3_RAW TO ROLE LOADER_ROLE;
 -- then apply typed projection in the bronze dbt models.
 -- ---------------------------------------------------------------------------
 
--- Customer events landing table
+-- Customer events landing table.
+-- NOTE: METADATA$ columns cannot be used as table DEFAULTs — they only exist
+-- when querying a stage. The pipes below populate file_name/file_row_number
+-- explicitly in their COPY SELECT list.
 CREATE TABLE IF NOT EXISTS RAW_DB.S3_RAW.EVENTS_LANDING (
     raw_payload         VARIANT,
-    file_name           VARCHAR(1000) DEFAULT METADATA$FILENAME,
-    file_row_number     NUMBER        DEFAULT METADATA$FILE_ROW_NUMBER,
+    file_name           VARCHAR(1000),
+    file_row_number     NUMBER,
     loaded_at           TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 )
 DATA_RETENTION_TIME_IN_DAYS = 7
@@ -98,8 +101,8 @@ COMMENT = 'Snowpipe landing table for raw JSON event files from S3.';
 -- Transactions landing table (Parquet inferred schema)
 CREATE TABLE IF NOT EXISTS RAW_DB.S3_RAW.TRANSACTIONS_LANDING (
     raw_payload         VARIANT,
-    file_name           VARCHAR(1000) DEFAULT METADATA$FILENAME,
-    file_row_number     NUMBER        DEFAULT METADATA$FILE_ROW_NUMBER,
+    file_name           VARCHAR(1000),
+    file_row_number     NUMBER,
     loaded_at           TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 )
 DATA_RETENTION_TIME_IN_DAYS = 7

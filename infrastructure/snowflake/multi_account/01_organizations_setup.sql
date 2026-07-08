@@ -37,8 +37,10 @@
 -- PREREQUISITES
 -- -------------
 --   • Snowflake Business Critical edition (required for Replication Groups)
---   • Contact Snowflake support to enable Organizations on your account
---   • The first account that enables Organizations becomes the ORGADMIN account
+--   • Every Snowflake account belongs to an organization; enable the ORGADMIN
+--     role on your primary account (Snowsight: Admin » Accounts, or ask the
+--     account team for legacy accounts) to manage it
+--   • Run these commands from the account where ORGADMIN is enabled
 --
 -- Run as: ORGADMIN (on the designated governance/admin account)
 -- =============================================================================
@@ -107,16 +109,23 @@ SHOW REPLICATION ACCOUNTS;
 
 -- ---------------------------------------------------------------------------
 -- ACCOUNT-LEVEL BUDGETS (Snowflake Budgets feature)
--- Prevents runaway spend on any single account. Notifications sent via email
--- when spend threshold is approached.
+-- Prevents runaway spend on any single account. Budgets are instances of the
+-- SNOWFLAKE.CORE.BUDGET class, monitor CREDIT usage against a monthly limit,
+-- and are created PER ACCOUNT (run these in each child account — budgets are
+-- not managed from the ORGADMIN account).
+-- See https://docs.snowflake.com/en/user-guide/budgets
 -- ---------------------------------------------------------------------------
 
--- CREATE BUDGET IF NOT EXISTS DEV_ACCOUNT_BUDGET
---     BUDGET_LIMIT       = 500        -- USD per month
---     START_TIME         = '2024-01-01 00:00:00'
---     END_TIME           = '2099-12-31 23:59:59'
---     NOTIFY_USERS       = ('data-platform-leads@mycompany.com')
---     FILTER = (ACCOUNT = '<YOUR_ORG>_DEV');
+-- Activate the built-in account-level budget and set its monthly credit limit:
+-- CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!ACTIVATE();
+-- CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!SET_SPENDING_LIMIT(500);   -- credits/month
+
+-- Custom budget scoped to specific objects (e.g. one warehouse or database):
+-- CREATE SNOWFLAKE.CORE.BUDGET IF NOT EXISTS
+--     MONITORING_DB.COST_MANAGEMENT.DEV_WORKLOAD_BUDGET();
+-- CALL MONITORING_DB.COST_MANAGEMENT.DEV_WORKLOAD_BUDGET!SET_SPENDING_LIMIT(200);
+-- Configure notification emails / recipients in Snowsight (Admin » Cost
+-- Management » Budgets) or via the budget's notification methods.
 
 -- ---------------------------------------------------------------------------
 -- CROSS-ACCOUNT GOVERNANCE VIEWS
@@ -127,27 +136,44 @@ SHOW REPLICATION ACCOUNTS;
 -- This schema is only visible on the ORGADMIN account.
 
 -- Credit usage by account (last 30 days)
-CREATE OR REPLACE VIEW IF NOT EXISTS MONITORING_DB.COST_MANAGEMENT.VW_ORG_CREDIT_USAGE AS
+CREATE OR REPLACE VIEW MONITORING_DB.COST_MANAGEMENT.VW_ORG_CREDIT_USAGE AS
 SELECT
     account_name,
+    region,
     service_type,
     usage_date,
     credits_used_compute,
     credits_used_cloud_services,
-    credits_used
+    credits_used,
+    credits_billed
+FROM SNOWFLAKE.ORGANIZATION_USAGE.METERING_DAILY_HISTORY
+WHERE usage_date >= DATEADD('day', -30, CURRENT_DATE())
+ORDER BY account_name, usage_date;
+
+-- Spend in contract currency by account (useful for finance reporting;
+-- USAGE_IN_CURRENCY_DAILY reports currency amounts, not credit columns)
+CREATE OR REPLACE VIEW MONITORING_DB.COST_MANAGEMENT.VW_ORG_SPEND_CURRENCY AS
+SELECT
+    account_name,
+    region,
+    usage_date,
+    usage_type,
+    currency,
+    usage,
+    usage_in_currency
 FROM SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY
 WHERE usage_date >= DATEADD('day', -30, CURRENT_DATE())
 ORDER BY account_name, usage_date;
 
 -- Storage by account
-CREATE OR REPLACE VIEW IF NOT EXISTS MONITORING_DB.COST_MANAGEMENT.VW_ORG_STORAGE AS
+CREATE OR REPLACE VIEW MONITORING_DB.COST_MANAGEMENT.VW_ORG_STORAGE AS
 SELECT
     account_name,
+    region,
     usage_date,
-    average_database_bytes     / POWER(1024, 3)  AS avg_database_gb,
-    average_stage_bytes        / POWER(1024, 3)  AS avg_stage_gb,
-    average_failsafe_bytes     / POWER(1024, 3)  AS avg_failsafe_gb
-FROM SNOWFLAKE.ORGANIZATION_USAGE.STORAGE_DAILY
+    average_bytes / POWER(1024, 4)  AS avg_storage_tb,
+    credits                         AS storage_credits
+FROM SNOWFLAKE.ORGANIZATION_USAGE.STORAGE_DAILY_HISTORY
 WHERE usage_date >= DATEADD('day', -30, CURRENT_DATE())
 ORDER BY account_name, usage_date;
 

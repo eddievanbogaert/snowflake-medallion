@@ -33,10 +33,15 @@ USE SCHEMA SQLSERVER_RAW;
 -- Fivetran creates and manages these tables automatically, but we define
 -- them here to document the expected schema and apply governance tags.
 -- Fivetran adds system columns: _FIVETRAN_SYNCED, _FIVETRAN_DELETED, _FIVETRAN_ID
+--
+-- NAMING: landing tables carry the plain source names (CUSTOMERS, ORDERS, ...)
+-- exactly as Fivetran creates them. The brz_* names belong to the dbt-managed
+-- bronze views in RAW_DB.BRONZE — keeping the two distinct avoids collisions
+-- between loader-managed tables and dbt-managed views.
 -- ---------------------------------------------------------------------------
 
 -- Customers table (matches SQL Server dbo.Customers)
-CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.BRZ_SQLSERVER_CUSTOMERS (
+CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.CUSTOMERS (
     -- Source PK
     customer_id             INTEGER,
     -- Source columns (types should match SQL Server; widths can be wider)
@@ -65,7 +70,7 @@ DATA_RETENTION_TIME_IN_DAYS = 14
 COMMENT = 'Raw customer records from SQL Server dbo.Customers. Loaded by Fivetran CDC.';
 
 -- Orders table (matches SQL Server dbo.Orders)
-CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.BRZ_SQLSERVER_ORDERS (
+CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.ORDERS (
     order_id                BIGINT,
     customer_id             INTEGER,
     order_date              TIMESTAMP_NTZ,
@@ -91,7 +96,7 @@ DATA_RETENTION_TIME_IN_DAYS = 14
 COMMENT = 'Raw order records from SQL Server dbo.Orders. Loaded by Fivetran CDC.';
 
 -- Order Line Items
-CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.BRZ_SQLSERVER_ORDER_ITEMS (
+CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.ORDER_ITEMS (
     order_item_id           BIGINT,
     order_id                BIGINT,
     product_id              INTEGER,
@@ -109,7 +114,7 @@ DATA_RETENTION_TIME_IN_DAYS = 14
 COMMENT = 'Raw order line items from SQL Server dbo.OrderItems.';
 
 -- Products
-CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.BRZ_SQLSERVER_PRODUCTS (
+CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.PRODUCTS (
     product_id              INTEGER,
     sku                     VARCHAR(100),
     product_name            VARCHAR(500),
@@ -146,7 +151,9 @@ GRANT INSERT, UPDATE ON FUTURE TABLES IN SCHEMA RAW_DB.SQLSERVER_RAW TO ROLE LOA
 -- ---------------------------------------------------------------------------
 
 -- Customer CSV table (ADF export — one file per day, partition by date)
-CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.BRZ_ADF_CUSTOMERS (
+-- NOTE: METADATA$ columns cannot be used as table DEFAULTs — they only exist
+-- when querying a stage. The COPY task below populates them explicitly.
+CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.ADF_CUSTOMERS (
     customer_id             VARCHAR(20),  -- VARCHAR to avoid load errors on bad data
     first_name              VARCHAR(100),
     last_name               VARCHAR(100),
@@ -160,35 +167,46 @@ CREATE TABLE IF NOT EXISTS RAW_DB.SQLSERVER_RAW.BRZ_ADF_CUSTOMERS (
     customer_status         VARCHAR(50),
     created_at              VARCHAR(50),
     updated_at              VARCHAR(50),
-    -- Bronze metadata
-    _source_file            VARCHAR(1000) DEFAULT METADATA$FILENAME,
-    _source_row             NUMBER        DEFAULT METADATA$FILE_ROW_NUMBER,
+    -- Bronze metadata (populated by the COPY task)
+    _source_file            VARCHAR(1000),
+    _source_row             NUMBER,
     _loaded_at              TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     _batch_date             DATE          DEFAULT CURRENT_DATE()
 )
 DATA_RETENTION_TIME_IN_DAYS = 14
 COMMENT = 'ADF pipe-delimited CSV extracts from SQL Server. Strings only — cast in silver.';
 
-GRANT INSERT, SELECT ON TABLE RAW_DB.SQLSERVER_RAW.BRZ_ADF_CUSTOMERS TO ROLE LOADER_ROLE;
-GRANT SELECT ON TABLE RAW_DB.SQLSERVER_RAW.BRZ_ADF_CUSTOMERS TO ROLE TRANSFORMER_ROLE;
+GRANT INSERT, SELECT ON TABLE RAW_DB.SQLSERVER_RAW.ADF_CUSTOMERS TO ROLE LOADER_ROLE;
+GRANT SELECT ON TABLE RAW_DB.SQLSERVER_RAW.ADF_CUSTOMERS TO ROLE TRANSFORMER_ROLE;
 
 -- Scheduled COPY INTO task (runs after ADF delivers files — adjust CRON as needed)
 CREATE TASK IF NOT EXISTS RAW_DB.SQLSERVER_RAW.TASK_COPY_ADF_CUSTOMERS
     WAREHOUSE          = INGESTION_WH
     SCHEDULE           = 'USING CRON 0 2 * * * UTC'  -- 02:00 UTC daily
-    COMMENT            = 'Loads ADF customer extracts from S3 stage into BRZ_ADF_CUSTOMERS.'
+    COMMENT            = 'Loads ADF customer extracts from S3 stage into ADF_CUSTOMERS.'
 AS
-    COPY INTO RAW_DB.SQLSERVER_RAW.BRZ_ADF_CUSTOMERS (
+    COPY INTO RAW_DB.SQLSERVER_RAW.ADF_CUSTOMERS (
         customer_id, first_name, last_name, email_address, phone_number,
         date_of_birth, gender, address_line_1, city, country_code,
-        customer_status, created_at, updated_at
+        customer_status, created_at, updated_at,
+        _source_file, _source_row
     )
-    FROM @RAW_DB.S3_RAW.STG_S3_CUSTOMERS
+    FROM (
+        SELECT
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+            METADATA$FILENAME,
+            METADATA$FILE_ROW_NUMBER
+        FROM @RAW_DB.S3_RAW.STG_S3_CUSTOMERS
+    )
     FILE_FORMAT = (FORMAT_NAME = RAW_DB.S3_RAW.FF_CSV_PIPE_DELIMITED)
     ON_ERROR = 'CONTINUE'
     PURGE = FALSE;  -- Keep source files for reprocessing
 
--- Resume the task (tasks start SUSPENDED)
+-- Resume the task (tasks start SUSPENDED).
+-- The task owner (SYSADMIN here) also needs the account-level EXECUTE TASK
+-- privilege before the task will run:
+-- USE ROLE ACCOUNTADMIN;
+-- GRANT EXECUTE TASK ON ACCOUNT TO ROLE SYSADMIN;
 -- ALTER TASK RAW_DB.SQLSERVER_RAW.TASK_COPY_ADF_CUSTOMERS RESUME;
 
 -- ---------------------------------------------------------------------------

@@ -28,7 +28,7 @@
 --   enforcing a second-party approval model for any access expansion.
 -- • For DoD RMF, this control contributes evidence for AC-6 (Least Privilege)
 --   in the System Security Plan (SSP). Reference this script and the
---   ACCOUNT_USAGE.SCHEMATA verification query in your CCM/POA&M tracking.
+--   ACCOUNT_USAGE.SCHEMATA verification query in your CCM/POAM tracking.
 -- • In FedRAMP systems where a contractor holds TRANSFORMER_ROLE (e.g., a
 --   system integrator running dbt), managed access ensures that contractor
 --   cannot self-provision access to government data without agency approval.
@@ -45,9 +45,10 @@ ALTER SCHEMA FOUNDATION_DB.ORDERS      ENABLE MANAGED ACCESS;
 ALTER SCHEMA FOUNDATION_DB.PRODUCTS    ENABLE MANAGED ACCESS;
 ALTER SCHEMA FOUNDATION_DB.EVENTS      ENABLE MANAGED ACCESS;
 ALTER SCHEMA FOUNDATION_DB.REFERENCE   ENABLE MANAGED ACCESS;
-ALTER SCHEMA FOUNDATION_DB.SNAPSHOTS   ENABLE MANAGED ACCESS;
--- ROW_POLICIES schema holds policy objects; managed access prevents unauthorised policy modifications
+ALTER SCHEMA FOUNDATION_DB.SNAPSHOTS   ENABLE MANAGED ACCESS;   -- created in 01_databases.sql; populated by dbt snapshots
+-- Policy-object schemas: managed access prevents unauthorised policy modifications
 ALTER SCHEMA FOUNDATION_DB.ROW_POLICIES ENABLE MANAGED ACCESS;
+ALTER SCHEMA FOUNDATION_DB.MASKING      ENABLE MANAGED ACCESS;
 
 -- ---------------------------------------------------------------------------
 -- ANALYTICS_DB (Gold layer) — managed access on all domain schemas
@@ -66,6 +67,7 @@ ALTER SCHEMA RAW_DB.SQLSERVER_RAW       ENABLE MANAGED ACCESS;
 ALTER SCHEMA RAW_DB.S3_RAW              ENABLE MANAGED ACCESS;
 ALTER SCHEMA RAW_DB.SNOWFLAKE_NATIVE_RAW ENABLE MANAGED ACCESS;
 ALTER SCHEMA RAW_DB.LANDING             ENABLE MANAGED ACCESS;
+ALTER SCHEMA RAW_DB.BRONZE              ENABLE MANAGED ACCESS;  -- dbt-managed bronze views
 
 -- ---------------------------------------------------------------------------
 -- MONITORING_DB — managed access on audit and quality schemas

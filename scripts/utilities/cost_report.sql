@@ -58,29 +58,20 @@ LIMIT 20;
 
 -- ---------------------------------------------------------------------------
 -- 4. CREDIT USAGE BY USER (identify heavy consumers)
+-- QUERY_ATTRIBUTION_HISTORY provides Snowflake's own per-query compute credit
+-- attribution — no need to approximate by joining metering to query history.
+-- (Note: excludes idle warehouse time, which is not attributable to a query.)
 -- ---------------------------------------------------------------------------
 SELECT
-    qh.user_name,
-    qh.role_name,
-    wm.warehouse_name,
-    COUNT(qh.query_id)                                   AS query_count,
-    SUM(qh.bytes_scanned) / POWER(1024, 3)               AS total_gb_scanned,
-    AVG(qh.total_elapsed_time / 1000)                    AS avg_elapsed_seconds,
-    -- Rough credit attribution: credits * (elapsed / warehouse_active_seconds)
-    ROUND(
-        SUM(wm.credits_used) *
-        SUM(qh.total_elapsed_time) /
-        NULLIF(SUM(SUM(qh.total_elapsed_time)) OVER (PARTITION BY wm.warehouse_name), 0),
-        4
-    )                                                    AS estimated_credits
-FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY qh
-JOIN SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY wm
-    ON  wm.warehouse_name = qh.warehouse_name
-    AND wm.start_time     <= qh.start_time
-    AND wm.end_time       >= qh.start_time
-WHERE qh.start_time >= DATE_TRUNC('month', CURRENT_DATE())
-GROUP BY qh.user_name, qh.role_name, wm.warehouse_name
-ORDER BY estimated_credits DESC NULLS LAST;
+    qa.user_name,
+    qa.warehouse_name,
+    COUNT(qa.query_id)                                   AS query_count,
+    ROUND(SUM(qa.credits_attributed_compute), 4)         AS credits_attributed,
+    ROUND(SUM(qa.credits_attributed_compute) * 3.00, 2)  AS estimated_cost_usd
+FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY qa
+WHERE qa.start_time >= DATE_TRUNC('month', CURRENT_DATE())
+GROUP BY qa.user_name, qa.warehouse_name
+ORDER BY credits_attributed DESC;
 
 -- ---------------------------------------------------------------------------
 -- 5. STORAGE COST ESTIMATE
@@ -89,50 +80,58 @@ SELECT
     table_catalog                                        AS database_name,
     table_schema                                         AS schema_name,
     COUNT(*)                                             AS table_count,
-    SUM(bytes) / POWER(1024, 4)                          AS total_tb,
-    SUM(bytes_failsafe) / POWER(1024, 4)                 AS failsafe_tb,
-    SUM(bytes_time_travel) / POWER(1024, 4)              AS time_travel_tb,
+    SUM(active_bytes) / POWER(1024, 4)                   AS active_tb,
+    SUM(failsafe_bytes) / POWER(1024, 4)                 AS failsafe_tb,
+    SUM(time_travel_bytes) / POWER(1024, 4)              AS time_travel_tb,
+    SUM(retained_for_clone_bytes) / POWER(1024, 4)       AS clone_retained_tb,
     -- Storage pricing: approx $23/TB/month (check your contract)
-    ROUND((SUM(bytes) + SUM(bytes_failsafe) + SUM(bytes_time_travel))
+    ROUND((SUM(active_bytes) + SUM(failsafe_bytes)
+           + SUM(time_travel_bytes) + SUM(retained_for_clone_bytes))
           / POWER(1024, 4) * 23, 2)                      AS estimated_storage_cost_usd_month
 FROM SNOWFLAKE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS
-WHERE deleted IS NULL
+WHERE NOT deleted
 GROUP BY table_catalog, table_schema
-ORDER BY total_tb DESC;
+ORDER BY active_tb DESC;
 
 -- ---------------------------------------------------------------------------
--- 6. SERVERLESS CREDIT USAGE (Snowpipe, Auto-clustering, Materialized Views)
+-- 6. SERVERLESS AND NON-WAREHOUSE CREDIT USAGE
+-- Covers Snowpipe, auto-clustering, materialized views, serverless tasks and
+-- alerts, search optimization, replication, AI services, etc. — everything
+-- billed outside warehouse metering. SERVICE_TYPE identifies the feature.
 -- ---------------------------------------------------------------------------
 SELECT
     usage_date,
-    usage_type,
+    service_type,
     SUM(credits_used)                                    AS credits_used,
     ROUND(SUM(credits_used) * 3.00, 2)                   AS estimated_cost_usd
-FROM SNOWFLAKE.ACCOUNT_USAGE.SERVERLESS_TASK_HISTORY
+FROM SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY
 WHERE usage_date >= DATE_TRUNC('month', CURRENT_DATE())
-GROUP BY usage_date, usage_type
+  AND service_type != 'WAREHOUSE_METERING'   -- warehouse compute covered in query 1
+GROUP BY usage_date, service_type
 ORDER BY usage_date DESC, credits_used DESC;
 
 -- ---------------------------------------------------------------------------
--- 7. AUTOMATED CLUSTERING SAVINGS ESTIMATE
--- Helps justify enabling Automatic Clustering on large tables.
+-- 7. CLUSTERING CANDIDATES
+-- Large tables with no clustering key are candidates for a clustering key /
+-- Automatic Clustering IF query patterns filter on a stable column. Confirm
+-- with SYSTEM$CLUSTERING_INFORMATION before enabling — auto-clustering has an
+-- ongoing serverless credit cost (see query 6, SERVICE_TYPE = AUTO_CLUSTERING).
 -- ---------------------------------------------------------------------------
 SELECT
+    table_catalog                                        AS database_name,
+    table_schema                                         AS schema_name,
     table_name,
-    schema_name,
-    database_name,
-    active_bytes / POWER(1024, 3)                        AS active_gb,
-    clustering_depth,
-    average_overlaps,
-    average_depth_ratio,
-    -- High depth ratio = poor clustering = expensive full-table scans
-    CASE
-        WHEN average_depth_ratio > 3 THEN 'CONSIDER_CLUSTERING'
-        WHEN average_depth_ratio BETWEEN 1.5 AND 3 THEN 'MODERATE_CLUSTERING'
-        ELSE 'WELL_CLUSTERED'
-    END                                                  AS clustering_recommendation
-FROM SNOWFLAKE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS
-WHERE active_bytes > 1 * POWER(1024, 3)                  -- Only tables > 1 GB
-  AND deleted IS NULL
-ORDER BY average_depth_ratio DESC
+    bytes / POWER(1024, 3)                               AS size_gb,
+    row_count,
+    clustering_key,
+    auto_clustering_on
+FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
+WHERE deleted IS NULL
+  AND table_type = 'BASE TABLE'
+  AND bytes > 1 * POWER(1024, 3)                         -- Only tables > 1 GB
+  AND clustering_key IS NULL
+ORDER BY bytes DESC
 LIMIT 20;
+
+-- Inspect clustering quality for a specific table and candidate key:
+-- SELECT SYSTEM$CLUSTERING_INFORMATION('FOUNDATION_DB.EVENTS.SLV_EVENTS', '(event_date)');

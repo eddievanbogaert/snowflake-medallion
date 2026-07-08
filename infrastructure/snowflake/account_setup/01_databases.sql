@@ -77,6 +77,12 @@ CREATE SCHEMA IF NOT EXISTS LANDING
     DATA_RETENTION_TIME_IN_DAYS = 7
     COMMENT = 'Transient landing zone for streamed / partial loads before promotion to source schema.';
 
+-- dbt-managed bronze views live in their own schema so the transformer role
+-- never needs write access to the loader-managed landing schemas above.
+CREATE SCHEMA IF NOT EXISTS BRONZE
+    DATA_RETENTION_TIME_IN_DAYS = 14
+    COMMENT = 'dbt-managed bronze views over the raw landing tables. No physical data.';
+
 -- ---------------------------------------------------------------------------
 -- SCHEMAS: FOUNDATION_DB (Silver)
 -- ---------------------------------------------------------------------------
@@ -103,6 +109,10 @@ CREATE SCHEMA IF NOT EXISTS REFERENCE
     DATA_RETENTION_TIME_IN_DAYS = 90
     COMMENT = 'Reference / lookup tables (currency, geography, calendar).';
 
+CREATE SCHEMA IF NOT EXISTS SNAPSHOTS
+    DATA_RETENTION_TIME_IN_DAYS = 30
+    COMMENT = 'SCD Type 2 history tables managed by dbt snapshots.';
+
 -- ---------------------------------------------------------------------------
 -- SCHEMAS: ANALYTICS_DB (Gold)
 -- Domain-oriented schemas aligned with business units.
@@ -126,6 +136,10 @@ CREATE SCHEMA IF NOT EXISTS EXECUTIVE
     DATA_RETENTION_TIME_IN_DAYS = 30
     COMMENT = 'Executive-level KPI summaries and dashboards.';
 
+CREATE SCHEMA IF NOT EXISTS AI
+    DATA_RETENTION_TIME_IN_DAYS = 30
+    COMMENT = 'AISQL-enriched data products (opt-in — see dbt gold/ai models).';
+
 -- ---------------------------------------------------------------------------
 -- SCHEMAS: MONITORING_DB
 -- ---------------------------------------------------------------------------
@@ -143,3 +157,7 @@ CREATE SCHEMA IF NOT EXISTS COST_MANAGEMENT
 CREATE SCHEMA IF NOT EXISTS DATA_QUALITY
     DATA_RETENTION_TIME_IN_DAYS = 30
     COMMENT = 'dbt test results and data quality trend metrics.';
+
+CREATE SCHEMA IF NOT EXISTS ELEMENTARY
+    DATA_RETENTION_TIME_IN_DAYS = 30
+    COMMENT = 'Elementary data observability artefacts (run results, anomaly metrics).';

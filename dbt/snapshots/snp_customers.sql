@@ -2,7 +2,7 @@
 {{
     config(
         target_schema    = 'SNAPSHOTS',
-        target_database  = 'FOUNDATION_DB',
+        target_database  = ('FOUNDATION_DB' if target.name == 'prod' else target.database),
         strategy         = 'timestamp',
         unique_key       = 'customer_id',
         updated_at       = 'source_synced_at',

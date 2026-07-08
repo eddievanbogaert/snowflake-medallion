@@ -57,11 +57,15 @@ USE ROLE ACCOUNTADMIN;
 -- Replace <ORG>.<SECONDARY_ACCOUNT> with your actual account identifiers.
 -- ---------------------------------------------------------------------------
 
--- Enable replication for specific databases on the primary account
-ALTER DATABASE RAW_DB        ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME-PROD-DR>;
-ALTER DATABASE FOUNDATION_DB ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME-PROD-DR>;
-ALTER DATABASE ANALYTICS_DB  ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME-PROD-DR>;
-ALTER DATABASE MONITORING_DB ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME-PROD-DR>;
+-- Enable replication for specific databases on the primary account.
+-- (Commented out because the identifiers are placeholders — replace
+--  <ORG>.<ACME_PROD_DR> with your real org.account identifier, then run.)
+-- Note: this legacy per-database step is only needed for standalone database
+-- replication; the failover group below manages its own database list.
+-- ALTER DATABASE RAW_DB        ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME_PROD_DR>;
+-- ALTER DATABASE FOUNDATION_DB ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME_PROD_DR>;
+-- ALTER DATABASE ANALYTICS_DB  ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME_PROD_DR>;
+-- ALTER DATABASE MONITORING_DB ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME_PROD_DR>;
 
 -- ---------------------------------------------------------------------------
 -- CREATE FAILOVER GROUP (recommended for DR)
@@ -72,16 +76,18 @@ ALTER DATABASE MONITORING_DB ENABLE REPLICATION TO ACCOUNTS <ORG>.<ACME-PROD-DR>
 -- Valid OBJECT_TYPES: ACCOUNT PARAMETERS, DATABASES, EXTERNAL VOLUMES,
 --   INTEGRATIONS, LISTINGS, NETWORK POLICIES, PROFILES, RESOURCE MONITORS,
 --   ROLES, SHARES, USERS, WAREHOUSES
-CREATE FAILOVER GROUP IF NOT EXISTS PROD_FAILOVER_GROUP
-    OBJECT_TYPES = DATABASES,
-                   USERS,
-                   ROLES,
-                   WAREHOUSES,
-                   RESOURCE MONITORS,
-                   NETWORK POLICIES
-    ALLOWED_DATABASES = RAW_DB, FOUNDATION_DB, ANALYTICS_DB, MONITORING_DB
-    ALLOWED_ACCOUNTS  = <ORG>.<ACME-PROD-DR>       -- secondary (DR) account
-    REPLICATION_SCHEDULE = '10 MINUTES';            -- RPO = 10 minutes
+-- (Commented out — replace <ORG>.<ACME_PROD_DR> with your real
+--  org.account identifier, then run.)
+-- CREATE FAILOVER GROUP IF NOT EXISTS PROD_FAILOVER_GROUP
+--     OBJECT_TYPES = DATABASES,
+--                    USERS,
+--                    ROLES,
+--                    WAREHOUSES,
+--                    RESOURCE MONITORS,
+--                    NETWORK POLICIES
+--     ALLOWED_DATABASES = RAW_DB, FOUNDATION_DB, ANALYTICS_DB, MONITORING_DB
+--     ALLOWED_ACCOUNTS  = <ORG>.<ACME_PROD_DR>       -- secondary (DR) account
+--     REPLICATION_SCHEDULE = '10 MINUTES';            -- RPO = 10 minutes
 
 -- ---------------------------------------------------------------------------
 -- REFRESH ON-DEMAND (manual trigger for testing or emergency cutover)
@@ -109,7 +115,9 @@ CREATE FAILOVER GROUP IF NOT EXISTS PROD_FAILOVER_GROUP
 -- ---------------------------------------------------------------------------
 
 -- -- 1. Verify replication lag before failing over
--- SELECT SYSTEM$GET_REPLICATION_GROUP_REFRESH_HISTORY('PROD_FAILOVER_GROUP');
+-- SELECT phase_name, start_time, end_time
+-- FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY('PROD_FAILOVER_GROUP'))
+-- ORDER BY start_time DESC;
 
 -- -- 2. Initiate failover (makes this account the new primary)
 -- ALTER FAILOVER GROUP PROD_FAILOVER_GROUP PRIMARY;
@@ -135,55 +143,69 @@ CREATE FAILOVER GROUP IF NOT EXISTS PROD_FAILOVER_GROUP
 -- CREATE DATABASE MONITORING_DB_PROD
 --     AS REPLICA OF <ORG>.<ACME-PROD>.MONITORING_DB;
 -- ALTER DATABASE MONITORING_DB_PROD REFRESH;   -- initial sync
--- ALTER DATABASE MONITORING_DB_PROD ENABLE REPLICATION; -- schedule auto-refresh
+--
+-- Standalone database replicas have no built-in schedule — refresh them with
+-- a task on the governance account (or move the database into a replication
+-- group, which has its own REPLICATION_SCHEDULE):
+-- CREATE TASK IF NOT EXISTS REFRESH_MONITORING_DB_PROD
+--     WAREHOUSE = ADMIN_WH
+--     SCHEDULE  = '60 MINUTES'
+-- AS
+--     ALTER DATABASE MONITORING_DB_PROD REFRESH;
+-- ALTER TASK REFRESH_MONITORING_DB_PROD RESUME;
 
 -- =============================================================================
 -- MONITORING: REPLICATION LAG AND HEALTH
+-- Run these on the SECONDARY account AFTER the failover group exists.
+-- REPLICATION_GROUP_REFRESH_HISTORY returns: PHASE_NAME, START_TIME, END_TIME,
+-- JOB_UUID, TOTAL_BYTES (JSON), OBJECT_COUNT (JSON), COMMITTED_OBJECT_COUNT,
+-- PRIMARY_SNAPSHOT_TIMESTAMP, ERROR (JSON).
 -- =============================================================================
 
--- Check replication lag for the failover group
-SELECT *
-FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY(
-    REPLICATION_GROUP_NAME => 'PROD_FAILOVER_GROUP'
-))
-ORDER BY phase_name;
+-- Check refresh phases for the failover group (most recent first):
+-- SELECT phase_name, start_time, end_time,
+--        DATEDIFF('minute', start_time, end_time) AS duration_minutes,
+--        error
+-- FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY('PROD_FAILOVER_GROUP'))
+-- ORDER BY start_time DESC;
 
--- Check replication lag for individual databases (legacy database replication)
-SELECT *
-FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.DATABASE_REFRESH_HISTORY())
-ORDER BY start_time DESC
-LIMIT 20;
+-- Check replication lag for individual databases (legacy database replication):
+-- SELECT *
+-- FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.DATABASE_REFRESH_HISTORY())
+-- ORDER BY start_time DESC
+-- LIMIT 20;
 
--- Store replication health in MONITORING_DB for alerting
+-- Queryable health view (create after the failover group exists — the view
+-- references the group by name and will fail validation without it)
 CREATE OR REPLACE VIEW MONITORING_DB.COST_MANAGEMENT.VW_REPLICATION_HEALTH AS
 SELECT
-    replication_group_name,
     phase_name,
     start_time,
     end_time,
     DATEDIFF('minute', start_time, end_time)  AS duration_minutes,
-    status,
-    error_count,
-    total_bytes_replicated / POWER(1024, 3)   AS gb_replicated
-FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY(
-    REPLICATION_GROUP_NAME => 'PROD_FAILOVER_GROUP'
-))
+    committed_object_count,
+    primary_snapshot_timestamp,
+    error
+FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY('PROD_FAILOVER_GROUP'))
 ORDER BY start_time DESC;
 
 GRANT SELECT ON VIEW MONITORING_DB.COST_MANAGEMENT.VW_REPLICATION_HEALTH
     TO ROLE DATA_ENGINEER_ROLE;
 
--- Alert if replication has not completed in the last 20 minutes (RPO breach risk)
+-- Alert if no refresh has COMPLETED in the last 20 minutes (RPO breach risk).
+-- Runs on the secondary account, where the refresh history is recorded.
 CREATE ALERT IF NOT EXISTS ALERT_REPLICATION_LAG
     WAREHOUSE  = ADMIN_WH
     SCHEDULE   = '10 MINUTES'
     IF (EXISTS (
         SELECT 1
-        FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY(
-            REPLICATION_GROUP_NAME => 'PROD_FAILOVER_GROUP'
-        ))
-        WHERE status  != 'SUCCEEDED'
-          AND start_time < DATEADD('minute', -20, CURRENT_TIMESTAMP())
+        FROM (
+            SELECT MAX(end_time) AS last_completed
+            FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY('PROD_FAILOVER_GROUP'))
+            WHERE phase_name = 'COMPLETED'
+        )
+        WHERE last_completed IS NULL
+           OR last_completed < DATEADD('minute', -20, CURRENT_TIMESTAMP())
     ))
     THEN
         CALL SYSTEM$SEND_EMAIL(

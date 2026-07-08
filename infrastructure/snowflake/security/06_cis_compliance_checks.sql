@@ -14,7 +14,7 @@
 USE ROLE ACCOUNTADMIN;
 
 -- =============================================================================
--- SECTION 1: IDENTITY & ACCESS MANAGEMENT
+-- SECTION 1: IDENTITY AND ACCESS MANAGEMENT
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -23,19 +23,25 @@ USE ROLE ACCOUNTADMIN;
 -- ---------------------------------------------------------------------------
 
 SELECT
-    user_name,
-    client_ip,
-    event_timestamp,
-    first_authentication_factor,
-    second_authentication_factor
-FROM SNOWFLAKE.ACCOUNT_USAGE.LOGIN_HISTORY
-WHERE is_success           = 'YES'
-  AND first_authentication_factor = 'PASSWORD'
-  AND second_authentication_factor IS NULL
-  AND event_timestamp      >= DATEADD('day', -30, CURRENT_TIMESTAMP())
-  AND user_name NOT IN ('SVC_LOADER', 'SVC_DBT_TRANSFORMER', 'SVC_POWERBI')
-ORDER BY event_timestamp DESC;
--- Expected: 0 rows (all human logins should use SAML or PASSWORD+MFA)
+    lh.user_name,
+    lh.client_ip,
+    lh.event_timestamp,
+    lh.first_authentication_factor,
+    lh.second_authentication_factor
+FROM SNOWFLAKE.ACCOUNT_USAGE.LOGIN_HISTORY lh
+WHERE lh.is_success           = 'YES'
+  AND lh.first_authentication_factor = 'PASSWORD'
+  AND lh.second_authentication_factor IS NULL
+  AND lh.event_timestamp      >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+  -- Exclude service users by TYPE (04_users.sql sets TYPE = SERVICE)
+  AND lh.user_name NOT IN (
+        SELECT name FROM SNOWFLAKE.ACCOUNT_USAGE.USERS
+        WHERE type = 'SERVICE' AND deleted_on IS NULL
+      )
+ORDER BY lh.event_timestamp DESC;
+-- Expected: 0 rows (all human logins should use SAML or PASSWORD+MFA).
+-- Enforced going forward by MONITORING_DB.AUDIT.HUMAN_AUTH_POLICY
+-- (08_authentication_policies.sql).
 
 -- ---------------------------------------------------------------------------
 -- CIS 1.2 — Ensure SSO is configured (SAML security integration exists)
@@ -75,9 +81,11 @@ SELECT
     created_on
 FROM SNOWFLAKE.ACCOUNT_USAGE.USERS
 WHERE deleted_on IS NULL
-  AND name IN ('SVC_LOADER', 'SVC_DBT_TRANSFORMER', 'SVC_POWERBI')
+  AND type = 'SERVICE'
   AND has_rsa_public_key = FALSE;
--- Expected: 0 rows (all service accounts must have an RSA key configured)
+-- Expected: 0 rows (all service accounts must have an RSA key configured).
+-- Key-pair-only auth is enforced by SERVICE_AUTH_POLICY
+-- (08_authentication_policies.sql).
 
 -- ---------------------------------------------------------------------------
 -- CIS 1.6 — Ensure SCIM integration is configured
@@ -130,7 +138,7 @@ SELECT
     network_policy
 FROM SNOWFLAKE.ACCOUNT_USAGE.USERS
 WHERE deleted_on   IS NULL
-  AND name         IN ('SVC_LOADER', 'SVC_DBT_TRANSFORMER', 'SVC_POWERBI')
+  AND type         = 'SERVICE'
   AND (network_policy IS NULL OR network_policy = '');
 -- Expected: 0 rows (all service accounts must have a network policy)
 
@@ -268,15 +276,22 @@ ORDER BY t.table_catalog, t.table_schema, t.table_name;
 -- Expected: 0 rows (all PII columns must have a masking policy)
 
 -- =============================================================================
--- SECTION 5: AUDITING & MONITORING
+-- SECTION 5: AUDITING AND MONITORING
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- CIS 5.1 — Ensure Enterprise edition (or higher) for 365-day log retention
+-- CIS 5.1 — Ensure the account edition supports the governance features used
+-- by this template (masking policies, row access policies, tag-based policies
+-- all require Enterprise edition or higher).
+-- Note: SNOWFLAKE.ACCOUNT_USAGE retention is 365 days on ALL editions — the
+-- edition requirement here is about the governance features, not log retention.
+-- There is no SQL context function that returns the edition; check one of:
+--   • Snowsight: Admin » Accounts (shows edition per account)
+--   • From the ORGADMIN account: SHOW ORGANIZATION ACCOUNTS; (EDITION column)
 -- ---------------------------------------------------------------------------
 
-SELECT CURRENT_EDITION();
--- Expected: ENTERPRISE or BUSINESS CRITICAL
+-- SHOW ORGANIZATION ACCOUNTS;   -- run as ORGADMIN; check the EDITION column
+-- Expected: ENTERPRISE or BUSINESS_CRITICAL
 
 -- ---------------------------------------------------------------------------
 -- CIS 5.2 — Ensure failed login monitoring alert is active
@@ -294,25 +309,30 @@ SHOW ALERTS LIKE 'ALERT_ACCOUNTADMIN_USAGE';
 
 -- ---------------------------------------------------------------------------
 -- CIS 5.4 / 6.1 / 6.2 — Ensure all security alerts are running
+-- (ALERT_HISTORY records executions, not definitions — alert definition state
+--  comes from SHOW ALERTS.)
 -- ---------------------------------------------------------------------------
 
+SHOW ALERTS IN ACCOUNT;
+
 SELECT
-    name            AS alert_name,
-    state,
-    schedule_text,
-    condition_text,
-    action_text
-FROM SNOWFLAKE.ACCOUNT_USAGE.ALERT_HISTORY
-WHERE name IN (
+    "name"      AS alert_name,
+    "state",
+    "schedule",
+    "warehouse"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "name" IN (
     'ALERT_FAILED_LOGIN_SPIKE',
     'ALERT_ACCOUNTADMIN_USAGE',
     'ALERT_NETWORK_POLICY_CHANGE',
     'ALERT_ROLE_GRANT_CHANGE',
+    'ALERT_MASKING_POLICY_CHANGE',
+    'ALERT_BREAKGLASS_LOGIN',
     'ALERT_UNEXPECTED_DDL',
     'ALERT_DBT_TEST_FAILURES'
 )
-ORDER BY name;
--- Expected: all alerts in STARTED state
+ORDER BY alert_name;
+-- Expected: all alerts in started state
 
 -- =============================================================================
 -- COMPLIANCE SUMMARY DASHBOARD
@@ -327,7 +347,10 @@ mfa_failures AS (
       AND first_authentication_factor = 'PASSWORD'
       AND second_authentication_factor IS NULL
       AND event_timestamp >= DATEADD('day', -30, CURRENT_TIMESTAMP())
-      AND user_name NOT IN ('SVC_LOADER', 'SVC_DBT_TRANSFORMER', 'SVC_POWERBI')
+      AND user_name NOT IN (
+            SELECT name FROM SNOWFLAKE.ACCOUNT_USAGE.USERS
+            WHERE type = 'SERVICE' AND deleted_on IS NULL
+          )
 ),
 orphaned_users AS (
     SELECT COUNT(*) AS cnt
@@ -340,7 +363,7 @@ svc_no_key AS (
     SELECT COUNT(*) AS cnt
     FROM SNOWFLAKE.ACCOUNT_USAGE.USERS
     WHERE deleted_on IS NULL
-      AND name IN ('SVC_LOADER', 'SVC_DBT_TRANSFORMER', 'SVC_POWERBI')
+      AND type = 'SERVICE'
       AND has_rsa_public_key = FALSE
 ),
 unmanaged_schemas AS (

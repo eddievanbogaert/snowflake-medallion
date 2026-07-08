@@ -20,13 +20,28 @@ USE SCHEMA AUDIT;
 -- Results are stored and can drive automatic tag assignment.
 -- ---------------------------------------------------------------------------
 
--- Run classification on a schema (example — run on each silver schema)
--- Results take a few minutes; check status with SYSTEM$GET_CLASSIFICATION_RESULT.
--- CALL SYSTEM$CLASSIFY_SCHEMA('FOUNDATION_DB.CUSTOMERS', {});
--- CALL SYSTEM$CLASSIFY_SCHEMA('FOUNDATION_DB.ORDERS', {});
+-- One-off classification of a single table; auto_tag applies Snowflake's
+-- system tags (SNOWFLAKE.CORE.SEMANTIC_CATEGORY / PRIVACY_CATEGORY) directly:
+-- CALL SYSTEM$CLASSIFY('FOUNDATION_DB.CUSTOMERS.CUSTOMERS', {'auto_tag': true});
 
--- Apply classification results as tags automatically:
--- CALL SYSTEM$APPLY_CLASSIFICATION_PROFILE('FOUNDATION_DB.CUSTOMERS', {});
+-- One-off classification of every table in a schema:
+-- CALL SYSTEM$CLASSIFY_SCHEMA('FOUNDATION_DB.CUSTOMERS', {'auto_tag': true});
+-- CALL SYSTEM$CLASSIFY_SCHEMA('FOUNDATION_DB.ORDERS',    {'auto_tag': true});
+
+-- Inspect the results for a table:
+-- SELECT SYSTEM$GET_CLASSIFICATION_RESULT('FOUNDATION_DB.CUSTOMERS.CUSTOMERS');
+
+-- CONTINUOUS AUTO-CLASSIFICATION (recommended for production):
+-- Attach a classification profile to each silver schema so new and changed
+-- tables are re-classified on a schedule and tagged automatically.
+-- See https://docs.snowflake.com/en/user-guide/classify-auto
+-- CREATE OR REPLACE SNOWFLAKE.DATA_PRIVACY.CLASSIFICATION_PROFILE
+--     MONITORING_DB.AUDIT.AUTO_CLASSIFICATION_PROFILE(
+--         {'minimum_object_age_for_classification_days': 0,
+--          'maximum_classification_validity_days': 30,
+--          'auto_tag': true});
+-- ALTER SCHEMA FOUNDATION_DB.CUSTOMERS
+--     SET CLASSIFICATION_PROFILE = 'MONITORING_DB.AUDIT.AUTO_CLASSIFICATION_PROFILE';
 
 -- ---------------------------------------------------------------------------
 -- DATA CLASSIFICATION RESULTS TABLE

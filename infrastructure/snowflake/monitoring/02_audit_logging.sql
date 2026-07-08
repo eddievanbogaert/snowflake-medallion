@@ -123,42 +123,48 @@ ORDER BY gb_scanned DESC;
 
 CREATE OR REPLACE VIEW MONITORING_DB.AUDIT.VW_GRANT_HISTORY AS
 SELECT
-    query_start_time,
+    start_time,
     user_name,
     role_name,
     query_type,
     LEFT(query_text, 500)                       AS query_text
 FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
 WHERE query_type IN ('GRANT', 'REVOKE')
-  AND query_start_time >= DATEADD('day', -90, CURRENT_TIMESTAMP())
-ORDER BY query_start_time DESC;
+  AND start_time >= DATEADD('day', -90, CURRENT_TIMESTAMP())
+ORDER BY start_time DESC;
 
 -- ---------------------------------------------------------------------------
 -- DATA ACCESS AUDIT
 -- Tracks who accessed which tables — important for GDPR / audit requests.
 -- ---------------------------------------------------------------------------
 
+-- ACCESS_HISTORY has no role/query-type columns; join QUERY_HISTORY on
+-- query_id to enrich each access record with the executing role.
 CREATE OR REPLACE VIEW MONITORING_DB.AUDIT.VW_TABLE_ACCESS_HISTORY AS
 SELECT
-    query_start_time,
-    user_name,
-    role_name,
-    query_type,
-    base_objects_accessed,   -- ARRAY of {objectDomain, objectName, columnNames}
-    direct_objects_accessed
-FROM SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY
-WHERE query_start_time >= DATEADD('day', -90, CURRENT_TIMESTAMP())
-ORDER BY query_start_time DESC;
+    ah.query_start_time,
+    ah.user_name,
+    qh.role_name,
+    qh.query_type,
+    ah.base_objects_accessed,   -- ARRAY of {objectDomain, objectName, columnNames}
+    ah.direct_objects_accessed
+FROM SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY ah
+LEFT JOIN SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY qh
+    ON qh.query_id = ah.query_id
+WHERE ah.query_start_time >= DATEADD('day', -90, CURRENT_TIMESTAMP())
+ORDER BY ah.query_start_time DESC;
 
 -- Who accessed PII tables (flattened)
 CREATE OR REPLACE VIEW MONITORING_DB.AUDIT.VW_PII_TABLE_ACCESS AS
 SELECT
     ah.query_start_time,
     ah.user_name,
-    ah.role_name,
+    qh.role_name,
     f.value:objectName::VARCHAR                 AS table_accessed,
     f.value:columns                             AS columns_accessed
-FROM SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY ah,
+FROM SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY ah
+LEFT JOIN SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY qh
+    ON qh.query_id = ah.query_id,
      LATERAL FLATTEN(input => ah.base_objects_accessed) f
 WHERE ah.query_start_time >= DATEADD('day', -90, CURRENT_TIMESTAMP())
   AND (

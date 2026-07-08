@@ -36,9 +36,10 @@ ALTER DATABASE ANALYTICS_DB  SET DATA_RETENTION_TIME_IN_DAYS = 30;
 -- Monitoring / audit
 ALTER DATABASE MONITORING_DB SET DATA_RETENTION_TIME_IN_DAYS = 90;
 
--- Non-prod: 0 to save on storage costs
-ALTER DATABASE DEV_DB  SET DATA_RETENTION_TIME_IN_DAYS = 0;
-ALTER DATABASE TEST_DB SET DATA_RETENTION_TIME_IN_DAYS = 0;
+-- Non-prod: 1 day (matches 01_databases.sql) — enough to UNDROP a fat-fingered
+-- dev object without paying for a long retention window.
+ALTER DATABASE DEV_DB  SET DATA_RETENTION_TIME_IN_DAYS = 1;
+ALTER DATABASE TEST_DB SET DATA_RETENTION_TIME_IN_DAYS = 1;
 
 -- ---------------------------------------------------------------------------
 -- TRANSIENT vs PERMANENT TABLES
@@ -129,8 +130,9 @@ SELECT
     created,
     last_altered,
     bytes / POWER(1024, 3)              AS size_gb,
-    -- Estimated fail-safe cost: size * 7 days * ~$0.0015/TB/hr
-    ROUND(bytes / POWER(1024, 4) * 7 * 24 * 0.0015, 4) AS estimated_failsafe_cost_usd
+    -- Estimated fail-safe cost: 7 days of storage at ~$23/TB/month
+    -- (TB * $23 * 7/30.44 ≈ TB * $5.29 — adjust $/TB for your contract/region)
+    ROUND(bytes / POWER(1024, 4) * 23.00 * 7 / 30.44, 4) AS estimated_failsafe_cost_usd
 FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
 WHERE deleted IS NULL
   AND table_type = 'BASE TABLE'
