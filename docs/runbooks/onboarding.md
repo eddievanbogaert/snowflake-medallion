@@ -11,7 +11,7 @@ Install the following tools on your workstation:
 
 ```bash
 # macOS (Homebrew)
-brew install python@3.11 git snowsql
+brew install python@3.11 git snowflake-cli
 
 # Python packages
 pip install dbt-snowflake==1.8.* sqlfluff pre-commit
@@ -21,7 +21,7 @@ pip install dbt-snowflake==1.8.* sqlfluff pre-commit
 |------|---------|-------|
 | Python | 3.11+ | Use `pyenv` to manage versions |
 | dbt-snowflake | 1.8.x | See packages.yml for exact constraint |
-| SnowSQL | 1.2.x | CLI for running .sql scripts |
+| Snowflake CLI (`snow`) | 3.x | CLI for running .sql scripts (replaces legacy SnowSQL) |
 | Git | 2.x | |
 | pre-commit | latest | Enforces code quality before commit |
 
@@ -150,10 +150,12 @@ dbt test --select <model_name>  # Specific model
 ## Step 6: Raise a Pull Request
 
 1. Push your branch and open a PR against `main`.
-2. The dbt CI workflow runs automatically — `dbt compile`, `dbt run`, and `dbt test`.
+2. Validate your change against the CI target before requesting review:
+   `dbt build --target ci` (builds into an ephemeral `TEST_DB` schema).
 3. Assign a peer reviewer from the Platform Team.
-4. After approval, the team lead merges to `main`.
-5. The production dbt workflow runs automatically at 04:00 UTC.
+4. After approval, the team lead merges to `main` and deploys the dbt project
+   (see docs/runbooks/environment_promotion.md).
+5. The production run executes nightly at 04:00 UTC via the scheduled task.
 
 ---
 
@@ -169,9 +171,10 @@ dbt test --store-failures         # Store failed test rows in Snowflake for insp
 dbt snapshot                      # Run SCD2 snapshots
 dbt source freshness              # Check source data freshness
 
-# SnowSQL
-snowsql -a <account> -u <user>    # Interactive session
-snowsql -f path/to/script.sql     # Run a SQL script
+# Snowflake CLI
+snow connection add               # One-time: configure a named connection
+snow sql                          # Interactive session
+snow sql -f path/to/script.sql    # Run a SQL script
 ```
 
 ---

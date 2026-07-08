@@ -56,7 +56,8 @@ snowflake-medallion/
 │   ├── architecture/
 │   │   ├── security-model.md           # RBAC hierarchy, masking, RLS, audit
 │   │   ├── cis_benchmark_compliance.md # CIS Snowflake Benchmark control mapping
-│   │   └── multi_account_architecture.md # Multi-account topology guide
+│   │   ├── multi_account_architecture.md # Multi-account topology guide
+│   │   └── cortex_ai.md                # Cortex AI layer: governance + capabilities
 │   └── runbooks/
 │       ├── onboarding.md               # New developer setup guide
 │       ├── incident-response.md        # 5 incident playbooks (data loss, pipeline, etc.)
@@ -68,16 +69,18 @@ snowflake-medallion/
 │       │   ├── 02_warehouses.sql       # Warehouse sizing and auto-suspend
 │       │   ├── 03_roles.sql            # RBAC role hierarchy and grants
 │       │   ├── 04_users.sql            # Service accounts and human user templates
-│       │   ├── 05_network_policies.sql # IP allowlisting (CIS 2.1/2.2)
+│       │   ├── 05_network_policies.sql # Network rules + IP allowlisting (CIS 2.1/2.2)
 │       │   ├── 06_password_policies.sql # Strong password + session timeout (CIS 1.3/1.4)
-│       │   └── 07_scim_integration.sql # Azure AD SCIM provisioning (CIS 1.6)
+│       │   ├── 07_scim_integration.sql # Azure AD SCIM provisioning (CIS 1.6)
+│       │   └── 08_authentication_policies.sql # SSO-only humans, key-pair-only services, MFA
 │       ├── security/
 │       │   ├── 01_object_tags.sql      # DATA_SENSITIVITY, PII_CATEGORY, COMPLIANCE_SCOPE tags
-│       │   ├── 02_data_classification.sql # Tag application to tables/columns
-│       │   ├── 03_column_masking_policies.sql # PII dynamic masking (email, phone, name, DOB, ...)
+│       │   ├── 02_data_classification.sql # Auto-classification profiles + manual log
+│       │   ├── 03_column_masking_policies.sql # PII dynamic masking (email, phone, name, DOB, IP, ...)
 │       │   ├── 04_row_access_policies.sql # Domain isolation, tenant, regional residency RLS
 │       │   ├── 05_managed_access_schemas.sql # Prevent privilege escalation (CIS 3.5)
-│       │   └── 06_cis_compliance_checks.sql  # Audit queries for every CIS control
+│       │   ├── 06_cis_compliance_checks.sql  # Audit queries for every CIS control
+│       │   └── 07_trust_center.sql     # Trust Center access + CIS Benchmarks scanner package
 │       ├── monitoring/
 │       │   ├── 01_resource_monitors.sql # Credit consumption alerts per warehouse
 │       │   ├── 02_audit_logging.sql     # Audit views over SNOWFLAKE.ACCOUNT_USAGE
@@ -85,10 +88,16 @@ snowflake-medallion/
 │       │   └── 04_privileged_access_alerts.sql # Security alerts (CIS 5.3/6.1/6.2)
 │       ├── integrations/               # S3 storage integration, Snowpipe, SQL Server
 │       ├── backup/                     # Time travel config, cross-region replication
-│       └── multi_account/
-│           ├── 01_organizations_setup.sql   # Snowflake Organizations + account provisioning
-│           ├── 02_cross_account_sharing.sql # Secure Data Sharing between accounts
-│           └── 03_account_replication.sql   # Failover Groups for HA/DR
+│       ├── multi_account/
+│       │   ├── 01_organizations_setup.sql   # Snowflake Organizations + account provisioning
+│       │   ├── 02_cross_account_sharing.sql # Secure Data Sharing between accounts
+│       │   └── 03_account_replication.sql   # Failover Groups for HA/DR
+│       └── cortex/
+│           ├── 00_cortex_governance.sql     # CORTEX_USER hygiene, model allowlist, AI cost alert
+│           ├── 01_semantic_views.sql        # Semantic models for Cortex Analyst / Intelligence
+│           ├── 02_cortex_search.sql         # Search service over platform runbooks/docs
+│           ├── 03_anomaly_monitoring.sql    # ML anomaly detection on credit spend
+│           └── 04_document_ai_ingestion.sql # AI_PARSE_DOCUMENT bronze pattern for PDFs
 ├── dbt/
 │   ├── dbt_project.yml
 │   ├── profiles.yml.example            # Connection template (copy to ~/.dbt/profiles.yml)
@@ -138,7 +147,7 @@ snowflake-medallion/
 | Snowflake account | Enterprise edition or higher | Business Critical for Failover Groups |
 | Python | 3.11+ | Use `pyenv` to manage versions |
 | dbt-snowflake | 1.8.x | See `dbt/packages.yml` for exact constraint |
-| SnowSQL | 1.2.x | For running infrastructure scripts |
+| Snowflake CLI (`snow`) | 3.x | For running infrastructure scripts (SnowSQL is legacy; `bootstrap.sh` supports both) |
 | AWS CLI | 2.x | Required for S3 storage integration setup |
 | Azure CLI | latest | Required for Azure AD / SAML SSO + SCIM configuration |
 
@@ -164,32 +173,35 @@ chmod +x scripts/setup/bootstrap.sh
 ./scripts/setup/bootstrap.sh --env prod --account <your-prod-account>
 ```
 
-Or run individual phases manually:
+Or run individual phases manually (examples use Snowflake CLI with a named
+connection — `snow connection add` — swap in `snowsql -f` if still on SnowSQL):
 
 ```bash
 # Account setup (databases, warehouses, roles, users, network policies,
-#                password policy, session policy, SCIM integration)
-snowsql -f infrastructure/snowflake/account_setup/01_databases.sql
-# ... through 07_scim_integration.sql
+#                password/session policies, SCIM, authentication policies)
+snow sql -f infrastructure/snowflake/account_setup/01_databases.sql
+# ... through 08_authentication_policies.sql
 
-# Security controls (tags, masking, row access, managed access schemas)
-snowsql -f infrastructure/snowflake/security/01_object_tags.sql
-# ... through 05_managed_access_schemas.sql
+# Security controls (tags, masking, row access, managed access, Trust Center)
+snow sql -f infrastructure/snowflake/security/01_object_tags.sql
+# ... through 07_trust_center.sql
 
 # Monitoring and alerting (resource monitors, audit views, operational + security alerts)
-snowsql -f infrastructure/snowflake/monitoring/01_resource_monitors.sql
+snow sql -f infrastructure/snowflake/monitoring/01_resource_monitors.sql
 # ... through 04_privileged_access_alerts.sql
 
 # External integrations (S3, Snowpipe, SQL Server)
-snowsql -f infrastructure/snowflake/integrations/01_storage_integration_s3.sql
-snowsql -f infrastructure/snowflake/integrations/02_external_stages.sql
-snowsql -f infrastructure/snowflake/integrations/03_sqlserver_integration.sql
+snow sql -f infrastructure/snowflake/integrations/01_storage_integration_s3.sql
+snow sql -f infrastructure/snowflake/integrations/02_external_stages.sql
+snow sql -f infrastructure/snowflake/integrations/03_sqlserver_integration.sql
 ```
 
-After bootstrapping, verify your CIS compliance posture:
+After bootstrapping, verify your CIS compliance posture (and enable the Trust
+Center's CIS Benchmarks scanner package — see
+`infrastructure/snowflake/security/07_trust_center.sql`):
 
 ```bash
-snowsql -f infrastructure/snowflake/security/06_cis_compliance_checks.sql
+snow sql -f infrastructure/snowflake/security/06_cis_compliance_checks.sql
 ```
 
 ### 3. Configure dbt
@@ -312,25 +324,49 @@ for a detailed guide on choosing a topology and configuring each pattern.
 
 ---
 
-## CI/CD
+## Deployment & Scheduling
 
-| Workflow | Trigger | What it does |
-|----------|---------|-------------|
-| `dbt-ci.yml` | Pull request to `main` | Compile, SQLFluff lint, run modified models (`state:modified+`), test, clean up ephemeral CI schema. Publishes `dbt-manifest-prod` artifact for state comparison. |
-| `dbt-production.yml` | Nightly at 04:00 UTC | Seed reference data → source freshness check → bronze+silver run → silver test gate → gold run → gold test → SCD2 snapshots → Slack notification. |
-| `snowflake-deploy.yml` | Push to `main` (infra path) or manual | Credential scan, deploy changed infrastructure SQL scripts. Manual dispatch allows targeting a specific environment and script. |
+This repo does not ship CI workflow files (earlier GitHub Actions workflows
+were removed). The recommended execution model is **native to Snowflake**:
 
-GitHub Secrets required:
+### dbt runs — dbt Projects on Snowflake (GA)
 
-| Secret | Used by |
-|--------|---------|
-| `SNOWFLAKE_ACCOUNT` | All workflows |
-| `SNOWFLAKE_CI_USER` | dbt-ci |
-| `SNOWFLAKE_PRIVATE_KEY_CONTENT` | dbt-ci (base64-encoded PEM) |
-| `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` | dbt-ci, dbt-production |
-| `SNOWFLAKE_PROD_PRIVATE_KEY` | dbt-production |
-| `SNOWFLAKE_SYSADMIN_PRIVATE_KEY` | snowflake-deploy |
-| `SLACK_WEBHOOK_URL` | dbt-production |
+[dbt Projects on Snowflake](https://docs.snowflake.com/en/user-guide/data-engineering/dbt-projects-on-snowflake)
+runs dbt Core natively inside Snowflake — no external runner, and the
+`SVC_DBT_TRANSFORMER` key never leaves your secrets manager:
+
+```sql
+-- One-time: deploy the dbt/ directory as a DBT PROJECT object
+-- (from a Snowsight Workspace connected to this git repo, or via `snow dbt deploy`)
+
+-- Nightly production run, scheduled with a serverless task:
+CREATE OR ALTER TASK FOUNDATION_DB.PUBLIC.TASK_DBT_NIGHTLY
+    SCHEDULE = 'USING CRON 0 4 * * * UTC'
+AS
+    EXECUTE DBT PROJECT FOUNDATION_DB.PUBLIC.SNOWFLAKE_MEDALLION
+        ARGS='build --target prod';
+```
+
+For PR validation, run `snow dbt execute` (or `dbt build --target ci`) against
+the `ci` target — it builds everything in an ephemeral `TEST_DB` schema named
+after the run (see `dbt/profiles.yml.example`).
+
+### Infrastructure SQL — Snowflake CLI
+
+Deploy infrastructure changes from any runner (or a developer machine) with
+key-pair auth via `scripts/setup/bootstrap.sh`, or per-script:
+
+```bash
+snow sql -f infrastructure/snowflake/security/03_column_masking_policies.sql \
+    --temporary-connection --account "$SNOWFLAKE_ACCOUNT" \
+    --user "$SNOWFLAKE_USER" --private-key-file "$SNOWFLAKE_PRIVATE_KEY_PATH" \
+    --role SECURITYADMIN
+```
+
+If you prefer GitHub Actions/GitLab CI, wrap those two commands in a workflow —
+use a **self-hosted runner with a stable egress IP** so the service-account
+network policy can stay tight (see `05_network_policies.sql`), and never
+allowlist shared hosted-runner IP ranges.
 
 ---
 
@@ -350,6 +386,28 @@ Custom singular tests:
 
 Test failures are stored in `MONITORING_DB.DATA_QUALITY` and trigger the
 `ALERT_DBT_TEST_FAILURES` Snowflake alert within 30 minutes.
+
+---
+
+## Cortex AI Layer
+
+An optional, governance-first Cortex AI layer lives under
+`infrastructure/snowflake/cortex/` — run `00_cortex_governance.sql` **before**
+anything else in it (Snowflake grants `CORTEX_USER` to PUBLIC by default; the
+script revokes it, pins a model allowlist, sets the cross-region posture, and
+adds an AI-spend budget alert). Capabilities included:
+
+| Capability | What you get |
+|-----------|--------------|
+| Semantic views + **Cortex Analyst** | Governed NL Q&A over `gld_revenue_summary` / `gld_customer_360` (RLS-aware, PII excluded from the semantic model) |
+| **Cortex Search** | "Ask the runbooks" retrieval service over `docs/` for on-call engineers and agents |
+| **ML anomaly detection** | Learned baseline on daily credit spend replaces static cost thresholds |
+| **Document AI ingestion** | `AI_PARSE_DOCUMENT` bronze pattern extending the medallion to PDFs/DOCX |
+| **AISQL in dbt** | Opt-in `gold/ai` model using `AI_CLASSIFY` to fill missing product categories (`enable_ai_enrichment` var) |
+| **Agents / Snowflake Intelligence** | Assembly guidance for domain-scoped agents over the semantic views + search service |
+
+See [docs/architecture/cortex_ai.md](docs/architecture/cortex_ai.md) for the
+full design, guardrails checklist, and cost model.
 
 ---
 
@@ -380,6 +438,6 @@ conventions, and SQL style guide.
 See [docs/runbooks/environment_promotion.md](docs/runbooks/environment_promotion.md)
 for the full process of promoting changes from development through to production.
 
-Credentials must **never** be committed — the `snowflake-deploy.yml` workflow includes
-a credential scan step that fails the build on any suspicious patterns. Use `<PLACEHOLDER>`
-tokens for any org-specific values in SQL scripts.
+Credentials must **never** be committed. Use `<PLACEHOLDER>` tokens for any
+org-specific values in SQL scripts, and run a secret scanner (e.g. `gitleaks`
+or GitHub secret scanning / push protection) on the repository.

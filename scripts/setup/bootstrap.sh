@@ -7,22 +7,41 @@
 #   ./scripts/setup/bootstrap.sh --env dev
 #   ./scripts/setup/bootstrap.sh --env prod --account myorg-myaccount
 #
+# NOTE on --env: environment separation is by ACCOUNT (see
+# docs/architecture/multi_account_architecture.md) — the same scripts run in
+# every account. --env only (a) gates the production confirmation prompt and
+# (b) names the log file. Point --account at the right environment's account.
+#
 # Prerequisites:
-#   - SnowSQL installed and in PATH
+#   - Snowflake CLI (`snow`) installed and in PATH — https://docs.snowflake.com/en/developer-guide/snowflake-cli
+#     (falls back to legacy SnowSQL if `snow` is not found)
 #   - .env file populated (copy from .env.example)
 #   - ACCOUNTADMIN credentials available (prompted for on first run)
 #
-# The script uses SnowSQL's key-pair authentication via environment variables.
-# Set SNOWSQL_PRIVATE_KEY_PATH in your environment before running.
+# Authentication:
+#   - Snowflake CLI: set SNOWFLAKE_USER and SNOWFLAKE_PRIVATE_KEY_PATH in .env
+#     (used with a temporary connection), or configure a named connection via
+#     `snow connection add` and export SNOWFLAKE_DEFAULT_CONNECTION_NAME.
+#   - SnowSQL (legacy): set SNOWSQL_PRIVATE_KEY_PATH before running.
 # =============================================================================
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
+# Load .env if present (before arg parsing, so --account overrides .env)
+# ---------------------------------------------------------------------------
+if [ -f ".env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
+
+# ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 ENV="dev"
-SNOWFLAKE_ACCOUNT=""
+SNOWFLAKE_ACCOUNT="${SNOWFLAKE_ACCOUNT:-}"
 DRY_RUN=false
 SKIP_CONFIRM=false
 
@@ -35,18 +54,6 @@ while [[ $# -gt 0 ]]; do
         *)                echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
-
-# ---------------------------------------------------------------------------
-# Load .env if present
-# ---------------------------------------------------------------------------
-if [ -f ".env" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    source .env
-    set +a
-fi
-
-SNOWFLAKE_ACCOUNT="${SNOWFLAKE_ACCOUNT:-${SNOWFLAKE_ACCOUNT:-}}"
 
 if [ -z "$SNOWFLAKE_ACCOUNT" ]; then
     echo "ERROR: SNOWFLAKE_ACCOUNT is not set. Use --account or set in .env"
@@ -83,30 +90,62 @@ if [ "${SKIP_CONFIRM}" = false ] && [ "${ENV}" = "prod" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# SnowSQL wrapper function
+# SQL client selection: Snowflake CLI (`snow`) preferred; SnowSQL is legacy.
+# ---------------------------------------------------------------------------
+if command -v snow >/dev/null 2>&1; then
+    SQL_CLIENT="snow"
+elif command -v snowsql >/dev/null 2>&1; then
+    SQL_CLIENT="snowsql"
+    log_warn "Using legacy SnowSQL — consider migrating to Snowflake CLI (snow)."
+else
+    log_error "Neither 'snow' (Snowflake CLI) nor 'snowsql' found in PATH."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# SQL execution wrapper
 # ---------------------------------------------------------------------------
 run_sql() {
     local script_path="$1"
     local role="${2:-ACCOUNTADMIN}"
 
-    log_info "Running: ${script_path} (role: ${role})"
+    log_info "Running: ${script_path} (role: ${role}) via ${SQL_CLIENT}"
 
     if [ "${DRY_RUN}" = true ]; then
         log_warn "[DRY RUN] Would execute: ${script_path}"
         return 0
     fi
 
-    snowsql \
-        -a "${SNOWFLAKE_ACCOUNT}" \
-        -r "${role}" \
-        -f "${script_path}" \
-        --option exit_on_error=true \
-        --option variable_substitution=true \
-        2>&1 | tee -a "logs/bootstrap_${ENV}_$(date +%Y%m%d).log"
-
-    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-        log_error "Script failed: ${script_path}"
-        exit 1
+    # The `if !` guard (rather than checking PIPESTATUS afterwards) is required
+    # because `set -euo pipefail` would abort before a follow-up check runs.
+    if [ "${SQL_CLIENT}" = "snow" ]; then
+        # Temporary connection from environment (SNOWFLAKE_USER /
+        # SNOWFLAKE_PRIVATE_KEY_PATH come from .env). If you prefer a named
+        # connection (`snow connection add`), replace the flags below with
+        # `--connection <name>`.
+        if ! snow sql \
+            --filename "${script_path}" \
+            --temporary-connection \
+            --account "${SNOWFLAKE_ACCOUNT}" \
+            --user "${SNOWFLAKE_USER:?SNOWFLAKE_USER must be set in .env for snow CLI}" \
+            --private-key-file "${SNOWFLAKE_PRIVATE_KEY_PATH:?SNOWFLAKE_PRIVATE_KEY_PATH must be set in .env for snow CLI}" \
+            --role "${role}" \
+            2>&1 | tee -a "logs/bootstrap_${ENV}_$(date +%Y%m%d).log"; then
+            log_error "Script failed: ${script_path}"
+            exit 1
+        fi
+    else
+        # Legacy SnowSQL. variable_substitution stays OFF: no script uses
+        # &vars, and enabling it makes snowsql choke on literal ampersands.
+        if ! snowsql \
+            -a "${SNOWFLAKE_ACCOUNT}" \
+            -r "${role}" \
+            -f "${script_path}" \
+            --option exit_on_error=true \
+            2>&1 | tee -a "logs/bootstrap_${ENV}_$(date +%Y%m%d).log"; then
+            log_error "Script failed: ${script_path}"
+            exit 1
+        fi
     fi
     log_info "Completed: ${script_path}"
 }
@@ -127,6 +166,7 @@ run_sql "infrastructure/snowflake/account_setup/04_users.sql"             "USERA
 run_sql "infrastructure/snowflake/account_setup/05_network_policies.sql"  "SECURITYADMIN"
 run_sql "infrastructure/snowflake/account_setup/06_password_policies.sql" "ACCOUNTADMIN"   # CIS 1.3/1.4
 run_sql "infrastructure/snowflake/account_setup/07_scim_integration.sql"  "ACCOUNTADMIN"   # CIS 1.6
+run_sql "infrastructure/snowflake/account_setup/08_authentication_policies.sql" "ACCOUNTADMIN"  # MFA/auth method enforcement
 
 log_info "=== PHASE 2: Security Controls ==="
 run_sql "infrastructure/snowflake/security/01_object_tags.sql"                  "ACCOUNTADMIN"
@@ -134,7 +174,9 @@ run_sql "infrastructure/snowflake/security/02_data_classification.sql"          
 run_sql "infrastructure/snowflake/security/03_column_masking_policies.sql"      "SECURITYADMIN"
 run_sql "infrastructure/snowflake/security/04_row_access_policies.sql"          "ACCOUNTADMIN"
 run_sql "infrastructure/snowflake/security/05_managed_access_schemas.sql"       "ACCOUNTADMIN"   # CIS 3.5
+run_sql "infrastructure/snowflake/security/07_trust_center.sql"                 "ACCOUNTADMIN"   # Trust Center access grants
 # Note: 06_cis_compliance_checks.sql is for auditing, not deployment — run manually
+# Note: Trust Center scanner packages (incl. CIS Benchmarks) are enabled in Snowsight — see 07_trust_center.sql
 
 log_info "=== PHASE 3: Monitoring ==="
 run_sql "infrastructure/snowflake/monitoring/01_resource_monitors.sql"          "ACCOUNTADMIN"
@@ -151,6 +193,11 @@ log_info "=== PHASE 5: Backup/DR Config ==="
 run_sql "infrastructure/snowflake/backup/01_time_travel_config.sql"   "SYSADMIN"
 # Note: replication requires a secondary account — run manually
 # run_sql "infrastructure/snowflake/backup/02_replication.sql"        "ACCOUNTADMIN"
+
+log_info "=== PHASE 6: Cortex AI Governance ==="
+run_sql "infrastructure/snowflake/cortex/00_cortex_governance.sql"    "ACCOUNTADMIN"
+# Note: cortex/01-04 (semantic views, search, anomaly ML, document AI) depend
+# on dbt-built tables / staged content — run manually after the first dbt run.
 
 log_info ""
 log_info "=== Bootstrap Complete ==="

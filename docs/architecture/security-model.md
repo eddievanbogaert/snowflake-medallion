@@ -41,11 +41,14 @@ recover access. This is a Snowflake best practice that prevents privilege orphan
 
 ## Authentication Controls
 
-| Principal | Auth Method | MFA | Password Policy |
-|-----------|------------|-----|-----------------|
-| Human users (SSO) | Azure AD SAML 2.0 | Enforced by Azure AD Conditional Access | No Snowflake password |
-| Service accounts | RSA Key-pair (2048-bit minimum) | N/A | No password set |
-| Emergency break-glass | Snowflake password (ACCOUNTADMIN only) | MFA enforced | CORPORATE_PASSWORD_POLICY |
+| Principal | Auth Method | MFA | Enforced By |
+|-----------|------------|-----|-------------|
+| Human users (SSO) | Azure AD SAML 2.0 | Azure AD Conditional Access | `HUMAN_AUTH_POLICY` (SAML only — no Snowflake passwords) |
+| Service accounts (`TYPE = SERVICE`) | RSA Key-pair (2048-bit minimum) | N/A | `SERVICE_AUTH_POLICY` (key-pair only) |
+| Emergency break-glass | Snowflake password (ACCOUNTADMIN only) | Snowflake MFA (enrolment required) | `BREAKGLASS_AUTH_POLICY` + `STRONG_PASSWORD_POLICY` |
+
+Authentication policies are defined in `account_setup/08_authentication_policies.sql`;
+password/session policies in `account_setup/06_password_policies.sql`.
 
 ### Key Rotation
 
@@ -77,7 +80,7 @@ See [infrastructure/snowflake/account_setup/05_network_policies.sql](../../infra
 
 ### Dynamic Column Masking
 
-PII columns are masked at query time based on `CURRENT_ROLE()`:
+PII columns are masked at query time based on the session's active role hierarchy (`IS_ROLE_IN_SESSION()` — primary + inherited + secondary roles):
 
 | Role | EMAIL | PHONE | FULL_NAME | DATE_OF_BIRTH |
 |------|-------|-------|-----------|---------------|
@@ -86,7 +89,10 @@ PII columns are masked at query time based on `CURRENT_ROLE()`:
 | POWERBI_* | `***@***.***` | `***-***-****` | `***` | `NULL` |
 
 Masking policies defined in `infrastructure/snowflake/security/03_column_masking_policies.sql`.
-Applied to production tables via `powerbi/row_level_security/rls_snowflake_setup.sql`.
+Applied initially via `powerbi/row_level_security/rls_snowflake_setup.sql`, and
+**re-applied automatically after every dbt rebuild** by the
+`apply_security_policies()` post-hook (dbt/macros/security_policies.sql) —
+`CREATE OR REPLACE TABLE` would otherwise silently drop the policies and tags.
 
 ### Row Access Policies
 

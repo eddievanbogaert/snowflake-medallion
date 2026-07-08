@@ -6,7 +6,7 @@ This guide explains when and how to structure a Snowflake deployment across mult
 
 ## Why Multiple Accounts?
 
-A single Snowflake account is sufficient for many organisations, but multiple accounts become valuable when you need:
+A single Snowflake account is sufficient for many organizations, but multiple accounts become valuable when you need:
 
 - **Environment isolation** — dev/staging/prod share a single billing agreement but cannot accidentally read each other's data.
 - **Compliance / data residency** — GDPR requires EU personal data to stay in the EU. A separate EU account satisfies this without complex per-table policies.
@@ -28,7 +28,7 @@ Snowflake Organisation
     └── <ORG>-PROD-DR  (Business Critical — DR replica in secondary region)
 ```
 
-**Best for:** Organisations of any size that want simple environment isolation and a clear promotion path. The DR account is optional but recommended for any production SLA.
+**Best for:** Organizations of any size that want simple environment isolation and a clear promotion path. The DR account is optional but recommended for any production SLA.
 
 **Data flow:**
 - Fivetran / ADF land data into `<ORG>-PROD` only.
@@ -62,16 +62,17 @@ Snowflake Organisation
 └── <ORG>-GOVERNANCE   (spoke: audit + compliance) ← receives replicated MONITORING_DB
 ```
 
-**Best for:** Organisations that want to decouple production data from BI/DS compute, or need a fully isolated governance account where audit logs cannot be altered by production admins.
+**Best for:** Organizations that want to decouple production data from BI/DS compute, or need a fully isolated governance account where audit logs cannot be altered by production admins.
 
 ---
 
 ## Enabling Snowflake Organizations
 
-Organizations are not enabled by default. To request enablement:
+Every Snowflake account already belongs to an organization. To manage it:
 
-1. Log in to the Snowflake account that will be the ORGADMIN account.
-2. Contact [Snowflake Support](https://support.snowflake.com) and request **Snowflake Organizations** to be enabled.
+1. Enable the `ORGADMIN` role on your primary account (Snowsight: Admin » Accounts;
+   long-lived legacy accounts may need to ask their Snowflake account team).
+2. Grant `ORGADMIN` to the platform administrators who provision accounts.
 3. Once enabled, the `ORGADMIN` role appears in `SHOW ROLES`.
 
 After enablement, follow `infrastructure/snowflake/multi_account/01_organizations_setup.sql` to provision child accounts and configure billing budgets.
@@ -152,13 +153,13 @@ Snowflake [Failover Groups](https://docs.snowflake.com/en/user-guide/account-rep
 | Recovery Point Objective (RPO) | 10 minutes | `REPLICATION_SCHEDULE = '10 MINUTES'` in `PROD_FAILOVER_GROUP` |
 | Recovery Time Objective (RTO) | ~5 minutes | `ALTER FAILOVER GROUP ... PRIMARY` promotes secondary instantly |
 
-**Replication cost:** Snowflake charges for data transfer between regions and for the storage of the replicated copy. For most organisations, this is a small fraction of total compute costs.
+**Replication cost:** Snowflake charges for data transfer between regions and for the storage of the replicated copy. For most organizations, this is a small fraction of total compute costs.
 
 Implementation: `infrastructure/snowflake/multi_account/03_account_replication.sql`
 
 ### Failover runbook (brief)
 
-1. Confirm replication lag: `SELECT SYSTEM$GET_REPLICATION_GROUP_REFRESH_HISTORY('PROD_FAILOVER_GROUP')`.
+1. Confirm replication lag: `SELECT phase_name, start_time, end_time FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY('PROD_FAILOVER_GROUP')) ORDER BY start_time DESC;`
 2. On the DR account: `ALTER FAILOVER GROUP PROD_FAILOVER_GROUP PRIMARY`.
 3. Update Fivetran destination, dbt profile, and Power BI data source to point to the new primary account identifier.
 4. Validate dbt `source freshness` and run a smoke test query on each gold table.

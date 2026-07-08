@@ -78,7 +78,7 @@ cd dbt
 cat target/run_results.json | python3 -m json.tool | grep -A5 '"status": "error"'
 
 # Or query Snowflake test failures table
-snowsql -q "
+snow sql -q "
 SELECT test_name, model_name, status, failures, message
 FROM MONITORING_DB.DATA_QUALITY.DBT_TEST_RESULTS
 WHERE recorded_at >= DATEADD('hour', -2, CURRENT_TIMESTAMP())
@@ -112,8 +112,16 @@ dbt test --select slv_customers --profiles-dir ~/.dbt --target prod
 
 ### Manual Trigger of Production Pipeline
 
-Navigate to GitHub Actions → **dbt Production Run** → **Run workflow**.
-Select `full_refresh: false` unless you need to rebuild incrementals from scratch.
+If using dbt Projects on Snowflake, execute the deployed project directly
+(or `EXECUTE TASK FOUNDATION_DB.PUBLIC.TASK_DBT_NIGHTLY;` to fire the schedule):
+
+```sql
+EXECUTE DBT PROJECT FOUNDATION_DB.PUBLIC.SNOWFLAKE_MEDALLION ARGS='build --target prod';
+```
+
+Otherwise run dbt from an operator workstation with the prod target:
+`dbt build --target prod` (add `--full-refresh` only if you need to rebuild
+incrementals from scratch).
 
 ---
 

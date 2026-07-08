@@ -16,11 +16,11 @@ This document maps every control in the **CIS Snowflake Security Foundations Ben
 
 | Control | Description | Status | Implementation |
 |---------|-------------|--------|----------------|
-| **CIS 1.1** | Ensure MFA is enforced for all non-service human users | Implemented | Azure AD Conditional Access enforces MFA for all SAML-authenticated users. Monitored via `MONITORING_DB.AUDIT.VW_LOGIN_HISTORY` (flag: `NO_MFA_WARNING`). |
+| **CIS 1.1** | Ensure MFA is enforced for all non-service human users | Implemented | `account_setup/08_authentication_policies.sql` — `HUMAN_AUTH_POLICY` restricts humans to SAML SSO (MFA enforced by Azure AD Conditional Access); `SERVICE_AUTH_POLICY` restricts service users to key-pair. Monitored via `MONITORING_DB.AUDIT.VW_LOGIN_HISTORY` (flag: `NO_MFA_WARNING`) and the Trust Center Security Essentials scanner. |
 | **CIS 1.2** | Ensure SSO is configured for user authentication | Implemented | `powerbi/saml_oauth_setup.md` — SAML 2.0 security integration with Azure AD. Service accounts use RSA key-pair, not password. |
 | **CIS 1.3** | Ensure a strong password policy is applied | Implemented | `account_setup/06_password_policies.sql` — `STRONG_PASSWORD_POLICY`: min 14 chars, upper/lower/digit/special required, 90-day rotation, 5-attempt lockout, 24-password history. |
 | **CIS 1.4** | Ensure session timeout is configured | Implemented | `account_setup/06_password_policies.sql` — `STANDARD_SESSION_POLICY` (60-min idle), `PRIVILEGED_SESSION_POLICY` (30-min idle for admins). Applied at account level. |
-| **CIS 1.5** | Ensure service accounts use key-pair authentication | Implemented | `account_setup/04_users.sql` — all three service accounts (`SVC_LOADER`, `SVC_DBT_TRANSFORMER`, `SVC_POWERBI`) configured with RSA public key; no passwords. Verified by `06_cis_compliance_checks.sql`. |
+| **CIS 1.5** | Ensure service accounts use key-pair authentication | Implemented | `account_setup/04_users.sql` — all service accounts created with `TYPE = SERVICE` and RSA public key; `08_authentication_policies.sql` blocks any non-key-pair method. Verified by `06_cis_compliance_checks.sql` (keys off `USERS.TYPE`). |
 | **CIS 1.6** | Ensure SCIM is used for user lifecycle management | Implemented | `account_setup/07_scim_integration.sql` — Azure AD SCIM integration for automated provisioning/deprovisioning. `VW_SCIM_VS_MANUAL_USERS` audits manually created accounts. |
 
 ### Notes on MFA enforcement
@@ -74,7 +74,7 @@ For `DATA_SENSITIVITY = RESTRICTED` tables (e.g., HR, legal), consider enabling 
 
 | Control | Description | Status | Implementation |
 |---------|-------------|--------|----------------|
-| **CIS 5.1** | Ensure Enterprise edition for 365-day log retention | Manual | Requires Snowflake Enterprise (or Business Critical) edition. Account usage data in `SNOWFLAKE.ACCOUNT_USAGE` is retained for 365 days on Enterprise. Verify with `SELECT CURRENT_EDITION()`. |
+| **CIS 5.1** | Ensure the edition supports required governance features | Manual | `SNOWFLAKE.ACCOUNT_USAGE` retention is 365 days on **all** editions; what requires Enterprise+ are the governance features this template uses (masking policies, row access policies, tag-based policies). Verify the edition in Snowsight (Admin » Accounts) or `SHOW ORGANIZATION ACCOUNTS` as ORGADMIN. |
 | **CIS 5.2** | Ensure failed login monitoring is in place | Implemented | `monitoring/03_alerts.sql` — `ALERT_FAILED_LOGIN_SPIKE` triggers on >5 failed logins in 30 minutes. `monitoring/02_audit_logging.sql` — `VW_RECENT_FAILED_LOGINS` and `VW_LOGIN_HISTORY` with `security_flag` column. |
 | **CIS 5.3** | Ensure ACCOUNTADMIN usage is alerted | Implemented | `monitoring/04_privileged_access_alerts.sql` — `ALERT_ACCOUNTADMIN_USAGE` checks every 15 minutes and emails `security-alerts@` on any non-read-only ACCOUNTADMIN execution. |
 | **CIS 5.4** | Ensure DDL operations are logged and alerted | Implemented | `monitoring/03_alerts.sql` — `ALERT_UNEXPECTED_DDL` detects CREATE/ALTER/DROP on `ANALYTICS_DB` by non-service accounts. `VW_QUERY_HISTORY` preserves all DDL for 365 days. |
@@ -92,11 +92,25 @@ For `DATA_SENSITIVITY = RESTRICTED` tables (e.g., HR, legal), consider enabling 
 
 ---
 
+## Continuous scanning — Snowflake Trust Center
+
+`security/07_trust_center.sql` grants Trust Center access and documents enabling
+the **CIS Benchmarks scanner package**, which evaluates the published CIS
+Snowflake Foundations Benchmark daily and tracks benchmark revisions
+automatically. Treat the Trust Center findings as the primary, always-current
+CIS posture signal; `06_cis_compliance_checks.sql` remains the template-specific
+evidence script (named alerts, schema lists, role names).
+
+---
+
 ## Quarterly Compliance Review Checklist
 
 Run the following on the first Monday of each quarter:
 
 ```sql
+-- 0. Review open Trust Center findings (CIS Benchmarks scanner package)
+-- SELECT * FROM SNOWFLAKE.TRUST_CENTER.FINDINGS ORDER BY event_time DESC;
+
 -- 1. Run the full compliance check script
 -- (infrastructure/snowflake/security/06_cis_compliance_checks.sql)
 
@@ -127,7 +141,8 @@ SHOW ALERTS;
 |---------------|----------|-------|
 | Enable Tri-Secret Secure | High for RESTRICTED data | Requires AWS KMS or Azure Key Vault integration. Business Critical edition required. |
 | Snowflake Private Link | High for prod | Eliminates public internet routing for all Snowflake traffic. |
-| Block secondary roles in session policy | High | Set `BLOCKED_SECONDARY_ROLES = ('ALL')` in session policies to enforce strict single-role sessions. Already applied to `PRIVILEGED_SESSION_POLICY`. |
+| Block secondary roles in session policy | High | Set `BLOCKED_SECONDARY_ROLES = ('ALL')` in session policies to enforce strict single-role sessions. Already applied to `PRIVILEGED_SESSION_POLICY`. Masking/RLS policies use `IS_ROLE_IN_SESSION()` and behave correctly either way. |
+| Enable Trust Center scanner packages | High | `security/07_trust_center.sql` — enable CIS Benchmarks + Threat Intelligence scanner packages in Snowsight. |
 | Dedicated DR account | Medium | See `infrastructure/snowflake/multi_account/03_account_replication.sql`. |
 | SCIM token rotation | Medium | Rotate `AZURE_AD_SCIM` bearer token every 90 days via `SYSTEM$GENERATE_SCIM_ACCESS_TOKEN`. |
 | Data Quality SLA alerting | Low | Extend `monitoring/03_alerts.sql` with domain-specific freshness thresholds. |
@@ -137,7 +152,7 @@ SHOW ALERTS;
 
 ## Government and Public Sector Considerations
 
-Organisations operating under FedRAMP, DoD RMF, or equivalent frameworks should note the following differences from the commercial CIS baseline:
+Organizations operating under FedRAMP, DoD RMF, or equivalent frameworks should note the following differences from the commercial CIS baseline:
 
 ### Authorisation Boundaries
 
@@ -161,8 +176,8 @@ Accounts in these regions use the `snowflakecomputing.mil` domain. Commercial `s
 | **Replication** | Any cross-region | DR target must be within the same authorised boundary (both FedRAMP) |
 | **SCIM IdP** | Azure AD / Okta commercial | Azure AD GCC High or other FedRAMP-authorised IdP |
 | **Email alerts** | Standard SMTP | FedRAMP-authorised email service (.mil or .gov) |
-| **Marketplace** | Available | Not available in FedRAMP High environments |
-| **Cortex AI** | Available | Restricted or unavailable in FedRAMP High |
+| **Marketplace** | Available | Limited/unavailable in SnowGov regions — check current listing availability |
+| **Cortex AI** | Available (FedRAMP Moderate authorized in commercial US East) | Available in SnowGov FedRAMP High / DoD IL5 environments; model availability varies by region — verify against Snowflake's current authorizations before relying on a specific model |
 
 ### NIST SP 800-53 Control Mapping
 
